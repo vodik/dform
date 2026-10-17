@@ -703,10 +703,10 @@ Variables a test sets (`DFORM_TEST_*`, the poll intervals) and those
 | `dform.state/` | at the project root, gitignored: per deployment its state, its master (sealed, or a key file) and audit log, and the project's registry and cache |
 | `dform.state/STACK/state.json` | a deployment's state, STACK the stack's full name (`dform.state/stacks.shop/`; `dform.state/STACK/K=V/` for a keyed stack's), with `state.master` (its master sealed under `[secrets] passphrase` and to its `recipients`) or `state.key` (its master in the clear, without `[secrets]`), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
 | `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), by its full name (`stacks.shop[env=prod]`), for the stacks that read its outputs |
-| `dform.state/cache/` | what providers and trust roots fetch (the Kubernetes OpenAPI document, JWKS) |
+| `dform.state/cache/` | what trust roots fetch (JWKS) |
 | `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`); `age/NAME` an age identity that opens a master sealed to its recipient |
 | `~/.local/share/dform/providers/` | the user's providers, `dform-provider-NAME` or `dform-provider-NAME.wasm` (under `$XDG_DATA_HOME`); a package's are in `/usr/lib/dform/providers/` |
-| `~/.cache/dform/` | git mirrors, compiled wasm providers, the language server's read-only files (under `$XDG_CACHE_HOME`) |
+| `~/.cache/dform/` | git mirrors, compiled wasm providers, what the host keeps for providers (`providers/PROVIDER/`: each account's apart, and each build's; `dform:host/cache`), the language server's read-only files (under `$XDG_CACHE_HOME`) |
 <!-- /man:files -->
 
 ### See also
@@ -874,8 +874,8 @@ plan waits about one round trip to each API rather than one per object;
 and the Plan calls, also at once. A provider may add its own lookups
 (the OVH provider lists a region's flavors and images together, and
 looks up a project named by its description once, keeping its id in
-`dform.state/cache/ovh-projects.json`, and the server's clock offset
-beside it, so a later run signs its calls without asking the time). On
+the host's cache, the account's, so a later run asks only that project).
+On
 the machine, a plan evaluates the program once and its policy pass again
 only for the rules that read the plan's deformation; a create made of a
 document prints the document's row and finds the sites of only the lines
@@ -1024,7 +1024,7 @@ sealed).
   beside it the published outputs `outputs.json`.
 - The fake backend's world (what "exists"): `dform.state/<stack>/remote.json`, beside the state.
 - Discovery inventory, shared by every stack: `dform.state/inventory.json`.
-- What providers and trust roots fetch (the k8s OpenAPI document, JWKS): `dform.state/cache/`.
+- What trust roots fetch (JWKS): `dform.state/cache/`; what providers keep (the k8s OpenAPI documents), the host's cache: `~/.cache/dform/providers/`.
 
 The mock's flags go after `dev`, before the command. `dform dev --inventory
 PATH` points at the discovery inventory file directly (see "Discovery facts"
@@ -1449,13 +1449,14 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   that name: `traefik.io`'s `Middleware` is
   `k8s.traefik.io.v1alpha1.middleware` and `k8s.traefik.middleware`.
 - The schema is derived at Configure from the cluster's `/openapi/v3`, and
-  cached as `k8s-openapi.json` in the stack's state directory: a
-  group-version's document is fetched again when the index names it at
-  another hash, the others kept (k3s answers new hashes for the index's
-  `apis` and `version` at every ask, which dform never fetches); the
-  schema derived from it is cached
-  beside it as `k8s-schema.json`, keyed by the document's hash, and so is
-  the snapshot's when offline. A run reads a kind's rows from it only when
+  kept in the host's cache (`dform:host/cache`): the account's, from run
+  to run, where a group-version's document is fetched again when the
+  index names it at another hash, the others kept (k3s answers new hashes
+  for the index's `apis` and `version` at every ask, which dform never
+  fetches); and the run's, so the deployments of one run on one cluster
+  ask it once. The schema derived from it is the account's too, keyed by
+  the document's hash, and the snapshot's, when offline, the provider
+  build's. A run reads a kind's rows from it only when
   it asks for that kind: its head names each kind and where its rows are,
   so a Configure reads the head (about 20ms on a debug build, where reading
   every row took 0.4s). `x-kubernetes-list-map-keys` are
@@ -1537,10 +1538,9 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
 - A provider configured by the program (`use k8s { kubeconfig = .. }`)
   serves the static schema until its settings are known: the snapshot,
   extended by the kinds the deployment's cluster served beyond it when it
-  was last reached (its CRDs, cached at
-  `dform.state/cache/schema/<deployment>/k8s.json`, keyed by the derivation
-  and the cluster's document, written when the program's settings
-  configure the cluster). A kind in neither waits on the provider for its
+  was last reached (its CRDs, the account's in the host's cache, by the
+  deployment, keyed by the derivation and the cluster's document, written
+  when the program's settings configure the cluster). A kind in neither waits on the provider for its
   schema until the settings arrive (in the tick after what they are made
   from; `later` when no tick of the plan makes them); from that Configure on the
   provider serves its cluster's kinds, and dform asks it then for the
@@ -5528,6 +5528,8 @@ or a value is never one.
 | `{provider} ssh forward` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a tunnel a provider forwards over SSH |
 | `{provider} git commit` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a commit a provider pushes to a repository |
 | `{provider} io.read` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a read a provider asks of the host |
+| `{provider} cache get` | `cache`, internal | `{asks} {about}` | `provider`, `scope` (`session`, `run`, `account`, `provider`), `hit` | what a provider kept, asked of the host's cache (`dform:host/cache`) |
+| `{provider} cache put` | `cache`, internal | `{asks} {about}` | `provider`, `scope` | what a provider keeps, in the host's cache |
 | `backend opened` | `store`, internal | `deployment {deployment}`, `located the deployment`, `outputs read`, `stack listed` | `addr` | a bucket's prefix opened: whether the bucket holds a write's condition asked once |
 | `master found` | `store`, internal | `deployment {deployment}`, `located the deployment` | | the deployment's master key read, or made for one with no state |
 | `lock taken` | `store`, internal | `deployment {deployment}` | | an apply's lock (its lease) taken, the state fenced |

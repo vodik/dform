@@ -24,6 +24,9 @@
 //!   location, without its userinfo, query or fragment: [`location`]);
 //! - `ratelimit.wait`: a provider's request waiting on its bucket's
 //!   window in the host, under its `io.call`;
+//! - `cache`: a get or a put of what the host keeps for a provider
+//!   (`dform:host/cache`), under the `provider.call` it is made in, with
+//!   `scope` and a get's `hit`;
 //! - `store`: what a deployment's store does (its backend opened, its
 //!   state written, its lock taken, its lease renewed, its audit log
 //!   appended to, its outputs read and published);

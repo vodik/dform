@@ -446,7 +446,7 @@ resource ovh.instance server {{
             .current_dir(&s.dir)
             .env("HOME", &s.dir)
             .env("XDG_CONFIG_HOME", s.path("config"))
-            .env("XDG_CACHE_HOME", wasm_cache())
+            .env("XDG_CACHE_HOME", own_cache(&s))
             .env("DFORM_OVH_RESOLVER", "127.0.0.1:9")
             .env_remove("OVH_ENDPOINT")
             .env_remove("OVH_APPLICATION_KEY")
@@ -592,8 +592,8 @@ fn the_k8s_component_traces_as_its_native_build_does() {
 }
 
 /// The Kubernetes provider as a wasm provider keeps what it fetched and
-/// derived in the run's cache directory, as its native build does: the
-/// next plan asks the cluster's index, and no document again.
+/// derived in the host's cache, as its native build does: the next plan
+/// asks the cluster's index, and no document again.
 #[test]
 fn the_k8s_component_keeps_its_cache_across_runs() {
     use crate::k8s_api::{Api, kubeconfig};
@@ -603,10 +603,8 @@ fn the_k8s_component_keeps_its_cache_across_runs() {
     plan_demo(&s, &kc);
     let fetched = api.count("GET /openapi/v3/", &[]);
     assert!(fetched > 2, "{fetched} documents");
-    for file in ["k8s-openapi.json", "k8s-schema.json"] {
-        let cached = s.path(&format!("dform.state/cache/{file}"));
-        assert!(cached.exists(), "{}", cached.display());
-    }
+    let kept = s.path("xdg/dform/providers/k8s");
+    assert!(kept.exists(), "{}", kept.display());
     plan_demo(&s, &kc);
     assert_eq!(
         api.count("GET /openapi/v3/", &[]),
@@ -645,7 +643,7 @@ fn plan_demo(s: &Scratch, kc: &str) -> common::Run {
         .current_dir(&s.dir)
         .env("HOME", &s.dir)
         .env("XDG_CONFIG_HOME", s.path("config"))
-        .env("XDG_CACHE_HOME", wasm_cache())
+        .env("XDG_CACHE_HOME", own_cache(s))
         .env("KUBECONFIG", kc)
         .env_remove("DFORM_K8S_OFFLINE")
         .env_remove("KUBERNETES_SERVICE_HOST")
@@ -898,4 +896,19 @@ fn the_vault_component_configures_through_the_host() {
         configured.account.as_deref(),
         Some(server.address().as_str())
     );
+}
+
+/// A cache of the scratch `s`'s own (`XDG_CACHE_HOME`), so what the host
+/// keeps for a provider is the run's project's alone, its compiled
+/// components the shared cache's ([`wasm_cache`]): compiled once.
+fn own_cache(s: &Scratch) -> std::path::PathBuf {
+    let own = s.path("xdg");
+    let compiled = wasm_cache().join("dform/wasm");
+    std::fs::create_dir_all(&compiled).unwrap();
+    std::fs::create_dir_all(own.join("dform")).unwrap();
+    let link = own.join("dform/wasm");
+    if !link.exists() {
+        std::os::unix::fs::symlink(&compiled, &link).unwrap();
+    }
+    own
 }

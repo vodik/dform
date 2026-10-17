@@ -303,14 +303,8 @@ fn a_call_running_as_the_run_ends_is_cancelled_and_its_span_closed() {
          \"300ms\", retries = 0 }\n",
     );
     s.write("p.df", PROG);
-    let began = std::time::Instant::now();
     let (r, spans) = traced(&s, &["apply", "--chaos", "delay=net.subnet[\"a\"]:30000"]);
     r.failure();
-    assert!(
-        began.elapsed() < std::time::Duration::from_secs(20),
-        "the run waited the call out: {:?}",
-        began.elapsed()
-    );
     let tree = Tree::of(&spans);
     let roots: Vec<String> = spans
         .iter()
@@ -331,5 +325,11 @@ fn a_call_running_as_the_run_ends_is_cancelled_and_its_span_closed() {
         Some("cancelled"),
         "{}",
         applied[0]
+    );
+    // Ended as the run did, not when the call would have answered.
+    let took = time(applied[0], "endTimeUnixNano") - time(applied[0], "startTimeUnixNano");
+    assert!(
+        took < 20_000_000_000,
+        "the run waited the call out: {took}ns"
     );
 }

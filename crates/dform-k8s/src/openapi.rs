@@ -43,13 +43,13 @@
 //! (`crates/dform-mock/schemas/k8s.df`'s `type_alias` facts, `k8s.deployment`) are
 //! the same types under a second name.
 
+use crate::cache::{self, Scope};
 use anyhow::{Context, Result, anyhow};
 use dform_core::ast::{Atom, Term};
 use dform_core::schema::Schema;
 use dform_core::value::Value;
 use serde_json::{Map, Value as Json};
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 /// The OpenAPI document of a recent Kubernetes release, trimmed to every
@@ -535,12 +535,13 @@ pub fn snapshot() -> Result<Derived> {
     derive(&doc, &aliases()?)
 }
 
-/// The derived schema of the checked-in snapshot, from the cache in `dir`
-/// when it holds the snapshot's ([`cached`]).
-pub fn snapshot_cached(dir: Option<&Path>) -> Result<Derived> {
+/// The derived schema of the checked-in snapshot, from the cache when it
+/// holds the snapshot's ([`cached`]): the provider build's, every
+/// account's.
+pub fn snapshot_cached() -> Result<Derived> {
     cached(
         &dform_core::zset::file::fnv64(SNAPSHOT.as_bytes()),
-        dir,
+        Scope::Provider,
         snapshot,
     )
 }
@@ -548,17 +549,14 @@ pub fn snapshot_cached(dir: Option<&Path>) -> Result<Derived> {
 /// This module's source: a cached derivation is of this code.
 const SOURCE: &str = include_str!("openapi.rs");
 
-/// Where the derived schema is cached, beside the OpenAPI document's cache.
-pub const DERIVED_CACHE: &str = "k8s-schema.json";
-
 /// The schema derived from the OpenAPI document whose hash is `doc_hash`:
-/// read from `DIR/k8s-schema.json` when that is keyed by the document's
-/// hash (and this derivation's source and aliases), else `derive`d and
-/// written there (`crate::cache`). Deriving is most of what the provider
+/// read from the cache's `schema KEY` in `scope` (keyed by the document's
+/// hash and this derivation's source and aliases), else `derive`d and
+/// kept there (`crate::cache`). Deriving is most of what the provider
 /// does at Configure; the cache skips parsing the document too.
 pub fn cached(
     doc_hash: &str,
-    dir: Option<&Path>,
+    scope: Scope,
     derive: impl FnOnce() -> Result<Derived>,
 ) -> Result<Derived> {
     use dform_core::zset::file::fnv64;
@@ -571,18 +569,15 @@ pub fn cached(
         )
         .as_bytes(),
     );
-    let path = dir.map(|d| d.join(DERIVED_CACHE));
-    if let Some(p) = &path
-        && let Some(text) = crate::cache::read(p)
+    let at = format!("schema {key}");
+    if let Some(text) = cache::read(scope, &at)
         && let Some(d) = decode(&text, &key)
     {
         return Ok(d);
     }
     let d = derive()?;
-    if let Some(p) = &path
-        && let Some(text) = encode(&d, &key)
-    {
-        crate::cache::write(p, &text)?;
+    if let Some(text) = encode(&d, &key) {
+        cache::write(scope, &at, &text);
     }
     Ok(d)
 }
@@ -602,11 +597,11 @@ fn derivation() -> String {
     )
 }
 
-/// Where a deployment's extension of the static schema is cached (R-110):
-/// `DIR/schema/<deployment>/k8s.json`, the deployment as its objects'
-/// label has it.
-pub fn extension_path(dir: &Path, stack: &str) -> std::path::PathBuf {
-    dir.join("schema").join(stack).join("k8s.json")
+/// What a deployment's extension of the static schema is cached as
+/// (R-110), the account's: `extension <deployment>`, the deployment as
+/// its objects' label has it.
+fn extension_key(stack: &str) -> String {
+    format!("extension {stack}")
 }
 
 /// The kinds `full` (a cluster's derivation) has and `base` (the static
@@ -660,11 +655,20 @@ pub fn extended(base: &Derived, ext: &Derived) -> Result<Derived> {
     })
 }
 
-/// The cached extension at `path` ([`extension_path`]) of this derivation:
-/// of the cluster document `doc_hash`, or of any when `None` (the
-/// deployment's cluster is not known yet: its last one's).
-pub fn read_extension(path: &Path, doc_hash: Option<&str>) -> Option<Derived> {
-    let text = crate::cache::read(path)?;
+/// The deployment `stack`'s cached extension of this derivation
+/// ([`extension_key`]): of the cluster document `doc_hash`, or of any
+/// when `None` (the deployment's cluster is not known yet: its last
+/// one's).
+pub fn read_extension(stack: &str, doc_hash: Option<&str>) -> Option<Derived> {
+    decode_extension(
+        &cache::read(Scope::Account, &extension_key(stack))?,
+        doc_hash,
+    )
+}
+
+/// The extension `text` holds, when it is of this derivation and of the
+/// cluster document `doc_hash` (any, when `None`).
+fn decode_extension(text: &str, doc_hash: Option<&str>) -> Option<Derived> {
     let key = serde_json::from_str::<Json>(text.split_once('\n')?.0)
         .ok()?
         .get("key")?
@@ -674,15 +678,22 @@ pub fn read_extension(path: &Path, doc_hash: Option<&str>) -> Option<Derived> {
     if version != derivation() || doc_hash.is_some_and(|h| h != hash) {
         return None;
     }
-    decode(&text, &key)
+    decode(text, &key)
 }
 
-/// Cache `ext`, the extension of the cluster document `doc_hash`, at
-/// `path`.
-pub fn write_extension(path: &Path, doc_hash: &str, ext: &Derived) -> Result<()> {
+/// Cache `ext`, the extension of the cluster document `doc_hash`, as the
+/// deployment `stack`'s.
+pub fn write_extension(stack: &str, doc_hash: &str, ext: &Derived) -> Result<()> {
+    let text = encode_extension(doc_hash, ext)?;
+    cache::write(Scope::Account, &extension_key(stack), &text);
+    Ok(())
+}
+
+/// `ext`, the extension of the cluster document `doc_hash`, as it is
+/// cached.
+fn encode_extension(doc_hash: &str, ext: &Derived) -> Result<String> {
     let key = format!("{} {doc_hash}", derivation());
-    let text = encode(ext, &key).ok_or_else(|| anyhow!("the extension does not encode"))?;
-    crate::cache::write(path, &text)
+    encode(ext, &key).ok_or_else(|| anyhow!("the extension does not encode"))
 }
 
 /// A cached derivation: a line `{"key", "kinds", "types": [[TYPE, FROM,
@@ -1271,14 +1282,12 @@ mod tests {
         );
         assert!(base.kind(mw).is_err());
 
-        let dir = std::env::temp_dir().join(format!("dform-k8s-ext-{}", std::process::id()));
-        let path = extension_path(&dir, "platform");
-        write_extension(&path, "h1", &ext).unwrap();
+        let text = encode_extension("h1", &ext).unwrap();
         assert!(
-            read_extension(&path, Some("h2")).is_none(),
+            decode_extension(&text, Some("h2")).is_none(),
             "another document"
         );
-        let cached = read_extension(&path, None).unwrap();
+        let cached = decode_extension(&text, None).unwrap();
         let both = extended(&base, &cached).unwrap();
         assert!(both.kind(mw).is_ok() && both.kind("k8s.storage_class").is_ok());
         assert!(
@@ -1287,7 +1296,6 @@ mod tests {
                 .attr(mw, "spec.holderIdentity")
                 .is_some()
         );
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The snapshot is the static schema (R-110): every kind of the stable

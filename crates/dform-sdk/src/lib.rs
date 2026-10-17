@@ -38,7 +38,8 @@
 pub use dform_core::files::Document;
 pub use dform_core::plugin::backend::{CallError, health};
 pub use dform_core::plugin::host::{
-    Calls, Class, Endpoint, Error, Failure, GitFile, HttpResponse as Response, Level, Run, Target,
+    Calls, Class, Endpoint, Error, Failure, GitFile, HttpResponse as Response, Level, Run, Scope,
+    Target,
 };
 pub use dform_core::plugin::pb;
 pub use dform_sdk_derive::Resource;
@@ -70,9 +71,10 @@ pub mod sync {
 }
 
 use dform_core::plugin::backend::{self, Call, Reply, Session, Within};
-use dform_core::plugin::host::{Handle, HttpRequest};
+use dform_core::plugin::host::{CacheAt, Handle, HttpRequest};
+use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// A provider: the protocol's calls, each answered as dform sends it,
@@ -303,6 +305,7 @@ pub struct Host {
     pub ssh: Ssh,
     pub git: Git,
     pub secrets: Secrets,
+    pub cache: Cache,
     pub log: Log,
 }
 
@@ -314,9 +317,75 @@ pub fn host() -> &'static Host {
         ssh: Ssh(()),
         git: Git(()),
         secrets: Secrets(()),
+        cache: Cache(()),
         log: Log(()),
     };
     &HOST
+}
+
+/// The account each session's first Configure named
+/// (`dform_core::plugin::host::account_of`): what a native build's cache
+/// calls name, its host having no other way to tell. A component's host
+/// knows the call a cache call is made in, and takes nothing from here.
+static ACCOUNTS: Mutex<BTreeMap<Session, String>> = Mutex::new(BTreeMap::new());
+
+/// `call`, made in `session`, is about to be answered: a Configure's
+/// account is its session's, when it is the session's first.
+#[cfg_attr(target_family = "wasm", allow(dead_code))] // a component's host knows
+pub(crate) fn configuring(session: Session, call: &Call) {
+    let Call::Configure(r) = call else { return };
+    let config = r
+        .config
+        .as_ref()
+        .and_then(|c| dform_core::plugin::wire::from_doc(c).ok())
+        .unwrap_or_default();
+    ACCOUNTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(session)
+        .or_insert_with(|| dform_core::plugin::host::account_of(&config));
+}
+
+/// `dform:host/cache`: what the provider keeps from one call to the next,
+/// kept by the host. The provider says what a thing is (its key, which
+/// names what it is of: `openapi https://10.0.0.1:6443`) and how widely
+/// it holds ([`Scope`]), never where, how much or how long: a get may
+/// miss whatever was put, and the provider answers the same either way,
+/// only slower (docs/providers.md, "The host's cache").
+pub struct Cache(());
+
+impl Cache {
+    /// What is kept at `key` in `scope`, if anything.
+    pub fn get(&self, scope: Scope, key: &str) -> Option<Vec<u8>> {
+        calls().cache_get(&Cache::at(scope), key)
+    }
+
+    /// The text kept at `key` in `scope`, if any.
+    pub fn get_text(&self, scope: Scope, key: &str) -> Option<String> {
+        self.get(scope, key).and_then(|b| String::from_utf8(b).ok())
+    }
+
+    /// Keep `value` at `key` in `scope`, in place of what was.
+    pub fn put(&self, scope: Scope, key: &str, value: impl Into<Vec<u8>>) {
+        calls().cache_put(&Cache::at(scope), key, value.into())
+    }
+
+    /// Where a get or a put is made: in the call this is, its session's
+    /// account.
+    fn at(scope: Scope) -> CacheAt {
+        let session = Within::here().session;
+        let account = ACCOUNTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&session)
+            .cloned()
+            .unwrap_or_default();
+        CacheAt {
+            scope,
+            session,
+            account,
+        }
+    }
 }
 
 /// A credential by name, held for the provider or granted by the

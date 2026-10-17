@@ -155,25 +155,23 @@ enum By<'a> {
     Held(&'a dform_sdk::Credential),
 }
 
-/// The file in dform's cache directory the project ids are kept in.
-pub const CACHE_FILE: &str = "ovh-projects.json";
-
-/// The cache file's entries: `"ENDPOINT NAME"` to a project's id.
-pub fn read_cache(file: &std::path::Path) -> BTreeMap<String, String> {
-    crate::machine::read(file)
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+/// What the provider keeps of an account from one run to the next, in
+/// the host's cache (`dform:host/cache`, the account's: the host keeps
+/// one account's apart from another's): the id of a project named by its
+/// description (`project ENDPOINT NAME`), the consumer key's expiry
+/// (`key ENDPOINT`). A miss asks the API.
+pub fn kept(key: &str) -> Option<String> {
+    dform_sdk::host()
+        .cache
+        .get_text(dform_sdk::Scope::Account, key)
 }
 
-/// Write `key = value` into the cache file, keeping its other entries.
-pub fn write_cache(file: &std::path::Path, key: &str, value: &str) {
-    let mut kept = read_cache(file);
-    if kept.get(key).map(String::as_str) == Some(value) {
-        return;
-    }
-    kept.insert(key.to_string(), value.to_string());
-    if let Ok(bytes) = serde_json::to_vec_pretty(&kept) {
-        crate::machine::write(file, &bytes);
+/// Keep `value` at `key` ([`kept`]), unless it is kept already.
+pub fn keep(key: &str, value: &str) {
+    if kept(key).as_deref() != Some(value) {
+        dform_sdk::host()
+            .cache
+            .put(dform_sdk::Scope::Account, key, value);
     }
 }
 

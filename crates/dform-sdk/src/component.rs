@@ -424,6 +424,16 @@ impl Calls for Imports {
         wh::git::commit(repo, branch, &files, message).map_err(error)
     }
 
+    /// `cache.get`: the host knows the call it is made in, so `at` says
+    /// only the scope.
+    fn cache_get(&self, at: &h::CacheAt, key: &str) -> Option<Vec<u8>> {
+        wh::cache::get(scope(at.scope), key)
+    }
+
+    fn cache_put(&self, at: &h::CacheAt, key: &str, value: Vec<u8>) {
+        wh::cache::put(scope(at.scope), key, &value)
+    }
+
     fn log(&self, level: Level, message: &str) {
         use wh::log::Level as L;
         wh::log::log(
@@ -435,5 +445,15 @@ impl Calls for Imports {
             },
             message,
         );
+    }
+}
+
+/// A cache scope, as the host's import takes it.
+fn scope(s: h::Scope) -> wh::cache::Scope {
+    match s {
+        h::Scope::Session => wh::cache::Scope::Session,
+        h::Scope::Run => wh::cache::Scope::Run,
+        h::Scope::Account => wh::cache::Scope::Account,
+        h::Scope::Provider => wh::cache::Scope::Provider,
     }
 }

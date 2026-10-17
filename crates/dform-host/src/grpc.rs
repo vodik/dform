@@ -191,6 +191,30 @@ impl h::host_server::Host for Service {
         .await
     }
 
+    /// `cache.get`, in the span of the call it is made in, where the
+    /// provider says (it runs as the operator: a statement, not a wall).
+    async fn cache_get(&self, r: Request<h::CacheGetRequest>) -> R<h::CacheGetResponse> {
+        let within = within(&r);
+        let r = r.into_inner();
+        let at = cache_at(r.at)?;
+        self.with(move |s| h::CacheGetResponse {
+            value: within.in_scope(|| s.cache_get(&at, &r.key)),
+        })
+        .await
+    }
+
+    /// `cache.put`, as `cache_get`.
+    async fn cache_put(&self, r: Request<h::CachePutRequest>) -> R<h::CachePutResponse> {
+        let within = within(&r);
+        let r = r.into_inner();
+        let at = cache_at(r.at)?;
+        self.with(move |s| {
+            within.in_scope(|| s.cache_put(&at, &r.key, r.value));
+            h::CachePutResponse {}
+        })
+        .await
+    }
+
     async fn log(&self, r: Request<h::LogRequest>) -> R<h::LogResponse> {
         let r = r.into_inner();
         self.with(move |s| {
@@ -199,6 +223,32 @@ impl h::host_server::Host for Service {
         })
         .await
     }
+}
+
+/// The span of the call a request is made in, by the number it names.
+fn within<T>(r: &Request<T>) -> tracing::Span {
+    dform_grpc::traced::call(r)
+        .and_then(dform_core::plugin::timed::call_span)
+        .unwrap_or_else(tracing::Span::current)
+}
+
+/// Where a cache request says it is made.
+#[allow(clippy::result_large_err)] // tonic's own error type
+fn cache_at(at: Option<h::CacheAt>) -> Result<dform_core::plugin::host::CacheAt, Status> {
+    use dform_core::plugin::host::Scope;
+    let at = at.ok_or_else(|| Status::invalid_argument("a cache request names no scope"))?;
+    let scope = match h::CacheScope::try_from(at.scope) {
+        Ok(h::CacheScope::Session) => Scope::Session,
+        Ok(h::CacheScope::Run) => Scope::Run,
+        Ok(h::CacheScope::Account) => Scope::Account,
+        Ok(h::CacheScope::Provider) => Scope::Provider,
+        _ => return Err(Status::invalid_argument("a cache request names no scope")),
+    };
+    Ok(dform_core::plugin::host::CacheAt {
+        scope,
+        session: dform_core::plugin::backend::Session(at.session),
+        account: at.account,
+    })
 }
 
 /// A running `Host` service: stopped, and its socket removed, when

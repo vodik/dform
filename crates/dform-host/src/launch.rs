@@ -100,6 +100,9 @@ fn component(path: &Path, _: Grants) -> Result<Link> {
 /// A native provider and the host service it may call back into.
 struct Native {
     conn: Conn,
+    /// Its host: told its build by its handshake, which its cache's
+    /// `provider` entries are kept for.
+    services: Arc<Services>,
     /// Dropped after the connection: the provider exits first.
     _host: grpc::Served,
 }
@@ -113,7 +116,11 @@ impl Provider for Native {
         &mut self,
         events: &mut dyn FnMut(Ticket, pb::Event),
     ) -> (Ticket, Result<Reply, CallError>) {
-        self.conn.next_completed(events)
+        let (t, r) = self.conn.next_completed(events);
+        if let Ok(Reply::Handshake(h)) = &r {
+            self.services.cache().built(&h.version);
+        }
+        (t, r)
     }
 
     fn is_dead(&mut self) -> bool {
@@ -145,6 +152,7 @@ fn native(exe: &Path, grants: Grants) -> Result<Link> {
     let reader = conn.reader();
     let native = Native {
         conn,
+        services,
         _host: served,
     };
     let mut link = Link::start(program.display(), Box::new(Paced::new(native, limiter)))?;

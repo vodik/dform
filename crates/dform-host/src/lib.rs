@@ -11,6 +11,7 @@
 
 /// The host's git is dform's (`dform_core::git`, R-103).
 pub use dform_core::git;
+pub mod cache;
 pub mod grpc;
 /// The host's HTTP is dform's one client (`dform_core::http`, R-103).
 pub use dform_core::http;

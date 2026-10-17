@@ -177,9 +177,9 @@ struct Account {
     client: Client,
     /// The project's id (its `serviceName`), when one is configured.
     project: Option<String>,
-    /// dform's cache directory, where the ids of projects named by
-    /// description are kept ([`resolve_project`]).
-    cache: Option<std::path::PathBuf>,
+    /// A run's: the ids of projects named by description are kept
+    /// ([`resolve_project`]).
+    cached: bool,
     /// How often an object is polled while it changes.
     poll: Duration,
 }
@@ -1080,7 +1080,7 @@ impl Ovh {
     /// `input` names, with its status.
     async fn region_rows(&self, what: &str, input: &str) -> Result<Vec<Vec<Value>>> {
         let a = self.account(what)?;
-        let p = resolve_project(&a.client, input, a.cache.as_deref()).await?;
+        let p = resolve_project(&a.client, input, a.cached).await?;
         let names = a.client.list(&format!("/cloud/project/{p}/region")).await?;
         let mut rows = Vec::new();
         for n in names
@@ -1158,22 +1158,16 @@ fn unix_now() -> u64 {
 }
 
 /// The project `given` names: its id (`serviceName`), or the description
-/// or name it has in the console. An id, or the id `cache` (dform's cache
-/// directory) kept for a description, costs one GET of that project,
+/// or name it has in the console. An id, or the id a run (`cached`) kept
+/// for a description ([`api::kept`]), costs one GET of that project,
 /// which must still answer to it; otherwise every project of the account
 /// is asked, and the id found is kept.
-pub async fn resolve_project(
-    client: &Client,
-    given: &str,
-    cache: Option<&std::path::Path>,
-) -> Result<String> {
-    let file = cache.map(|c| c.join(api::CACHE_FILE));
-    let kept = file.as_deref().map(api::read_cache).unwrap_or_default();
-    let key = format!("{} {given}", client.credentials().endpoint);
+pub async fn resolve_project(client: &Client, given: &str, cached: bool) -> Result<String> {
+    let key = format!("project {} {given}", client.credentials().endpoint);
     let is_id = given.len() == 32 && given.bytes().all(|b| b.is_ascii_hexdigit());
-    let guess = kept
-        .get(&key)
-        .cloned()
+    let guess = cached
+        .then(|| api::kept(&key))
+        .flatten()
         .or_else(|| is_id.then(|| given.to_string()));
     if let Some(id) = guess
         && let Ok(Some(p)) = client
@@ -1184,10 +1178,8 @@ pub async fn resolve_project(
         return Ok(id);
     }
     let id = resolve_listed(client, given).await?;
-    if let Some(f) = &file
-        && id != given
-    {
-        api::write_cache(f, &key, &id);
+    if cached && id != given {
+        api::keep(&key, &id);
     }
     Ok(id)
 }

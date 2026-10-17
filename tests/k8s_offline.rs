@@ -26,6 +26,7 @@ fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args:
     let mut c = common::dform();
     c.args(common::yes(args))
         .current_dir(&s.dir)
+        .env("XDG_CACHE_HOME", s.path("xdg"))
         .env_remove("KUBERNETES_SERVICE_HOST")
         .env_remove("KUBERNETES_SERVICE_PORT");
     match kubeconfig {
@@ -222,6 +223,7 @@ fn offline_is_said_in_one_sentence() {
         c.args(["plan", "k8s_demo.df"])
             .current_dir(&s.dir)
             .env("HOME", &s.dir)
+            .env("XDG_CACHE_HOME", s.path("xdg"))
             .env_remove("KUBECONFIG")
             .env_remove("DFORM_K8S_OFFLINE")
             .env_remove("KUBERNETES_SERVICE_HOST")
@@ -268,6 +270,7 @@ fn the_environments_kubeconfig_is_the_providers_only_by_a_grant() {
         let mut c = common::dform();
         c.args(["plan", "k8s_demo.df"])
             .current_dir(&s.dir)
+            .env("XDG_CACHE_HOME", s.path("xdg"))
             .env("KUBECONFIG", &kc)
             .env_remove("DFORM_K8S_OFFLINE")
             .env_remove("KUBERNETES_SERVICE_HOST");
@@ -439,16 +442,16 @@ fn most_at_once(spans: &[&Json]) -> usize {
 }
 
 /// The cluster's OpenAPI documents, and the schema derived from them,
-/// cached in dform.state/cache/ (`plan` plans again): a plan fetches no
-/// document the index names at the same URL again, whatever its other
-/// entries say (k3s answers new hashes for `apis` and `version` at every
-/// ask), and only the one whose URL changed.
+/// kept in the host's cache (the account's, under `XDG_CACHE_HOME`;
+/// `plan` plans again): a plan fetches no document the index names at
+/// the same URL again, whatever its other entries say (k3s answers new
+/// hashes for `apis` and `version` at every ask), and only the one whose
+/// URL changed.
 fn the_documents_are_cached(s: &Scratch, api: &Api, plan: &dyn Fn()) {
-    let cache = s.path("dform.state/cache/k8s-openapi.json");
-    assert!(cache.exists(), "the schema is cached in dform.state/cache/");
+    let kept = kept(&s.path("xdg"), "k8s");
     assert!(
-        s.path("dform.state/cache/k8s-schema.json").exists(),
-        "and the schema derived from it"
+        kept.len() >= 2,
+        "the documents and the schema derived from them are kept: {kept:?}"
     );
     let fetched = api.count("GET /openapi/v3/", &[]);
     plan();
@@ -797,10 +800,21 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
 fn offline_provider(
     s: &Scratch,
     dir: &str,
-) -> (dform::plugin::link::Link, dform::plugin::backend::Session) {
+) -> (
+    dform::plugin::link::Link,
+    dform::plugin::backend::Session,
+    dform_host::grpc::Served,
+) {
+    // Its host, its cache under `dir`; the provider's build as a
+    // handshake tells the host's own launch of it (its `provider` level).
+    let host = dform_host::services::Services::new(dform::plugin::host::Grants::none("k8s"))
+        .with_cache_in(s.path(dir));
+    host.cache().built("this build");
+    let served = dform_host::grpc::serve_shared(std::sync::Arc::new(host)).unwrap();
     let env = dform_grpc::spawn::Env::default()
         .unset("KUBECONFIG")
-        .set("DFORM_K8S_OFFLINE", "1");
+        .set("DFORM_K8S_OFFLINE", "1")
+        .set(dform_host::grpc::ENV, &served.address);
     let mut conn =
         dform_grpc::client::Conn::link(&dform_grpc::spawn::Program::exe(k8s()), &env).unwrap();
     let config = json!({"world": s.path(&format!("{dir}/world.json")).display().to_string()});
@@ -810,12 +824,16 @@ fn offline_provider(
             dform::plugin::wire::doc(&config),
         )
         .unwrap();
-    (conn, dform::plugin::backend::Session(r.session))
+    (conn, dform::plugin::backend::Session(r.session), served)
 }
 
 /// A Schema answer's facts, spelled.
 fn schema_of(
-    (conn, session): &mut (dform::plugin::link::Link, dform::plugin::backend::Session),
+    (conn, session, _): &mut (
+        dform::plugin::link::Link,
+        dform::plugin::backend::Session,
+        dform_host::grpc::Served,
+    ),
     types: Option<&[&str]>,
 ) -> Vec<String> {
     use dform::ast::Atom;
@@ -833,8 +851,9 @@ fn schema_of(
         .collect()
 }
 
-/// The provider derives the schema once per OpenAPI document and caches
-/// it beside the document's cache (`k8s-schema.json`, keyed by its hash):
+/// The provider derives the schema once per OpenAPI document and keeps
+/// it in the host's cache (offline, the snapshot's: the provider build's,
+/// keyed by its hash):
 /// a Schema request naming types is answered from it with their rows (and
 /// their alias targets') and every type_provider row.
 #[test]
@@ -844,8 +863,9 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
         |facts: &[String], prefix: &str| facts.iter().filter(|f| f.starts_with(prefix)).count();
     let all = schema_of(&mut offline_provider(&s, "st"), None);
     assert!(count(&all, "type_attr(") > 15_000);
-    let cache = s.path("st/k8s-schema.json");
-    assert!(cache.exists(), "the derived schema is cached");
+    let kept = kept(&s.path("st"), "k8s");
+    assert_eq!(kept.len(), 1, "the derived schema is kept: {kept:?}");
+    let cache = kept[0].clone();
 
     let some = schema_of(&mut offline_provider(&s, "st"), Some(&["k8s.deployment"]));
     let types: std::collections::BTreeSet<&str> = some
@@ -897,10 +917,33 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
     assert_ne!(head["key"], json!("another"));
 }
 
+/// The files the host keeps for `provider` under the cache `root`
+/// (`dform_host::cache`: one an entry).
+fn kept(root: &std::path::Path, provider: &str) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let dir = root.join(provider);
+    let dir = match dir.exists() {
+        true => dir,
+        false => root.join("dform/providers").join(provider),
+    };
+    if dir.exists() {
+        files_under(&dir, &mut out);
+    }
+    out
+}
+
+/// A host's cache entry: its head (the key it is of), and its text.
+fn entry(path: &std::path::Path) -> (Vec<u8>, String) {
+    let bytes = std::fs::read(path).unwrap();
+    let len = u64::from_be_bytes(bytes[..8].try_into().unwrap()) as usize;
+    let (head, text) = bytes.split_at(8 + len);
+    (head.to_vec(), String::from_utf8(text.to_vec()).unwrap())
+}
+
 /// The k8s schema cache's head and its groups of rows: (type, read with
 /// the kinds, rows).
 fn read_cache(path: &std::path::Path) -> (Json, Vec<(String, bool, Vec<Json>)>) {
-    let text = std::fs::read_to_string(path).unwrap();
+    let (_, text) = entry(path);
     let (head, body) = text.split_once('\n').unwrap();
     let head: Json = serde_json::from_str(head).unwrap();
     let groups = head["types"]
@@ -930,7 +973,10 @@ fn write_cache(path: &std::path::Path, head: &mut Json, groups: &[(String, bool,
         types.push(json!([t, from, body.len(), eager]));
     }
     head["types"] = json!(types);
-    std::fs::write(path, format!("{head}\n{body}")).unwrap();
+    let (key, _) = entry(path);
+    let mut bytes = key;
+    bytes.extend_from_slice(format!("{head}\n{body}").as_bytes());
+    std::fs::write(path, bytes).unwrap();
 }
 
 /// Every file under `dir`, recursively.

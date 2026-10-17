@@ -63,6 +63,10 @@ service Host {
   rpc GitCommit(GitCommitRequest) returns (GitCommitResponse);
   // log.log
   rpc Log(LogRequest) returns (LogResponse);
+  // cache.get
+  rpc CacheGet(CacheGetRequest) returns (CacheGetResponse);
+  // cache.put
+  rpc CachePut(CachePutRequest) returns (CachePutResponse);
 }
 
 service Manifest {
@@ -261,6 +265,43 @@ message LogRequest {
 }
 
 message LogResponse {}
+
+// cache.scope. CACHE_SCOPE_UNSPECIFIED is refused.
+enum CacheScope {
+  CACHE_SCOPE_UNSPECIFIED = 0;
+  SESSION = 1;
+  RUN = 2;
+  ACCOUNT = 3;
+  PROVIDER = 4;
+}
+
+// Where a get or a put is made. A component's host knows the call it is
+// made in; a native provider's names it: the session of its call, and
+// that session's account as its first Configure named it
+// (`dform_core::plugin::host::account_of`). A native provider runs as the
+// operator, so this is a statement, not a wall.
+message CacheAt {
+  CacheScope scope = 1;
+  uint64 session = 2;
+  string account = 3;
+}
+
+message CacheGetRequest {
+  CacheAt at = 1;
+  string key = 2;
+}
+
+message CacheGetResponse {
+  optional bytes value = 1;
+}
+
+message CachePutRequest {
+  CacheAt at = 1;
+  string key = 2;
+  bytes value = 3;
+}
+
+message CachePutResponse {}
 
 message ManifestRequest {}
 

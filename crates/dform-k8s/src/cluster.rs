@@ -14,13 +14,13 @@
 //! does not end. Between polls the call sleeps (`dform_sdk::sleep`): a
 //! wasm provider answers its other calls meanwhile.
 
+use crate::cache::{self, Scope};
 use crate::object::MANAGER;
 use crate::openapi::Kind;
 use anyhow::{Context, Result, anyhow, bail};
 use dform_sdk::{Credential, Request, Response, host, join_all};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::time::Duration;
 
 /// How long the API server may take to answer its OpenAPI index, the
@@ -414,18 +414,25 @@ impl Cluster {
     }
 
     /// The OpenAPI v3 document, `{"paths": {GV: DOC}}`: each group-version's
-    /// document the index names ([`served`]). The copy cached at `cache`
-    /// (`crate::cache`) is used as is when the index names each of its
+    /// document the index names ([`served`]). The run's copy (`crate::cache`)
+    /// is used as it is, unless `fresh` (a kind the cluster serves since,
+    /// R-126): the deployments of a run on one cluster fetch it once. Else
+    /// the account's copy is used as is when the index names each of its
     /// documents at the URL it was fetched from (the URL carries the
     /// document's hash); otherwise each document whose URL changed is
     /// fetched again, the rest kept, and the cache rewritten. A cached
     /// document is parsed only if it is needed ([`Document::parse`]): its
     /// derived schema may be cached too.
-    pub async fn openapi(&self, cache: Option<&Path>) -> Result<Document> {
+    pub async fn openapi(&self, fresh: bool) -> Result<Document> {
+        let key = format!("openapi {}", self.url);
+        if !fresh && let Some(text) = cache::read(Scope::Run, &key) {
+            return Ok(Document::cached(text));
+        }
         let index = served(&self.get_json("/openapi/v3", Some(REACH)).await?)?;
         let mut kept = None;
-        if let Some(text) = cache.and_then(crate::cache::read) {
+        if let Some(text) = cache::read(Scope::Account, &key) {
             if Cached::names(&text, &index) {
+                cache::write(Scope::Run, &key, &text);
                 return Ok(Document::cached(text));
             }
             kept = serde_json::from_str::<Cached>(&text).ok();
@@ -456,9 +463,8 @@ impl Cluster {
             document: json!({ "paths": paths }),
         };
         let text = serde_json::to_string(&cached)?;
-        if let Some(cache) = cache {
-            crate::cache::write(cache, &text)?;
-        }
+        cache::write(Scope::Account, &key, &text);
+        cache::write(Scope::Run, &key, &text);
         Ok(Document {
             hash: dform_core::zset::file::fnv64(text.as_bytes()),
             text: None,

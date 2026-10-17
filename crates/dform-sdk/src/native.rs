@@ -13,8 +13,8 @@ use crate::{Absent, Handler};
 use anyhow::{Context, Result};
 use dform_core::plugin::backend::{self, Within};
 use dform_core::plugin::host::{
-    Calls, Endpoint, Error, Failure, GitFile, Handle, HttpRequest, HttpResponse, Level, Opened,
-    Run, Target,
+    CacheAt, Calls, Endpoint, Error, Failure, GitFile, Handle, HttpRequest, HttpResponse, Level,
+    Opened, Run, Scope, Target,
 };
 use dform_grpc::host as conv;
 use dform_grpc::host_pb as h;
@@ -54,6 +54,7 @@ impl<H: Handler> backend::Handler for Blocking<H> {
         call: backend::Call,
         progress: backend::Progress,
     ) -> Result<backend::Reply, backend::CallError> {
+        crate::configuring(session, &call);
         block_on(self.0.handle(session, call, progress))
     }
 
@@ -381,6 +382,31 @@ impl Calls for Grpc {
         Ok(r.commit)
     }
 
+    /// `Host.CacheGet`, naming the call it is made in; a host that keeps
+    /// no cache (one built before it) has nothing.
+    fn cache_get(&self, at: &CacheAt, key: &str) -> Option<Vec<u8>> {
+        let req = dform_grpc::traced::request(
+            h::CacheGetRequest {
+                at: Some(cache_at(at)),
+                key: key.into(),
+            },
+            Within::here().call,
+        );
+        rpc!(self, cache_get, req).ok()?.value
+    }
+
+    fn cache_put(&self, at: &CacheAt, key: &str, value: Vec<u8>) {
+        let req = dform_grpc::traced::request(
+            h::CachePutRequest {
+                at: Some(cache_at(at)),
+                key: key.into(),
+                value,
+            },
+            Within::here().call,
+        );
+        let _ = rpc!(self, cache_put, req);
+    }
+
     fn log(&self, level: Level, message: &str) {
         let req = h::LogRequest {
             level: conv::from_level(level),
@@ -392,5 +418,19 @@ impl Calls for Grpc {
         {
             eprintln!("{level:?}: {message}");
         }
+    }
+}
+
+/// Where a cache call is made, as the `Host` service takes it.
+fn cache_at(at: &CacheAt) -> h::CacheAt {
+    h::CacheAt {
+        scope: match at.scope {
+            Scope::Session => h::CacheScope::Session,
+            Scope::Run => h::CacheScope::Run,
+            Scope::Account => h::CacheScope::Account,
+            Scope::Provider => h::CacheScope::Provider,
+        } as i32,
+        session: at.session.0,
+        account: at.account.clone(),
     }
 }

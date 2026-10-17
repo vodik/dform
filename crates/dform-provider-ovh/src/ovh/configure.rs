@@ -6,7 +6,8 @@ use super::*;
 use std::path::PathBuf;
 
 /// What a Configure gives: the program's settings, when they came, and
-/// dform's cache directory.
+/// whether it is a run's (dform names its cache directory: what the
+/// provider keeps from one run to the next is kept, `api::kept`).
 struct Given {
     /// The program's `use ovh { .. }` settings came.
     configured: bool,
@@ -19,7 +20,7 @@ struct Given {
     /// (`signed:lab`).
     signature: Option<String>,
     project: Option<String>,
-    cache: Option<PathBuf>,
+    run: bool,
 }
 
 impl Given {
@@ -45,10 +46,7 @@ impl Given {
                 .and_then(Json::as_str)
                 .map(String::from),
             project: setting("project")?,
-            cache: config
-                .get("cache")
-                .and_then(Json::as_str)
-                .map(PathBuf::from),
+            run: config.get("cache").is_some_and(Json::is_string),
         })
     }
 
@@ -99,21 +97,20 @@ impl Ovh {
         let client = Client::opened(creds).map_err(|e| anyhow!("{e}"))?;
         // Run outside a program and a project, as `provider check` runs
         // it: which credentials, and what they may do.
-        let full = !given.configured && given.cache.is_none();
-        let cache = given.cache.as_deref();
-        let notes = crate::credential::notes(&client, full, cache, unix_now()).await;
+        let full = !given.configured && !given.run;
+        let notes = crate::credential::notes(&client, full, given.run, unix_now()).await;
         let project = given
             .project
             .or_else(|| env("OVH_CLOUD_PROJECT_SERVICE").filter(|v| !v.is_empty()));
         let project = match project {
-            Some(p) => Some(resolve_project(&client, &p, cache).await?),
+            Some(p) => Some(resolve_project(&client, &p, given.run).await?),
             None => None,
         };
         let account = project.clone();
         let reached = Account {
             client,
             project,
-            cache: given.cache,
+            cached: given.run,
             poll: poll_every(env),
         };
         self.set_account(Ok(Arc::new(reached)), false);

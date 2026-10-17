@@ -5,8 +5,8 @@
 //! ["kubeconfig:environment"]`: `KUBECONFIG`, `~/.kube/config`, or the
 //! pod's service account, as its signer reads it,
 //! `dform_provider_k8s_signer`) and derives the schema from its `/openapi/v3`,
-//! cached as `k8s-openapi.json` in the cache directory Configure names
-//! (`dform.state/cache/`; else beside the world file; `crate::cache`).
+//! kept in the host's cache (`crate::cache`): the account's from run to
+//! run, the run's for every deployment of it.
 //! With no cluster to reach, or `DFORM_K8S_OFFLINE` set (natively: a wasm
 //! provider has no environment), the provider is offline: the schema is
 //! the checked-in snapshot's, Plan diffs locally, and Read, Apply and
@@ -16,7 +16,7 @@
 //! extended by the CRDs its cluster served at the deployment's last run,
 //! the environment ignored) and again with its `settings` once they are
 //! known (`Cluster::configured`), when the cluster's CRDs are cached
-//! (`dform.state/cache/schema/<deployment>/k8s.json`) and served from then
+//! (the account's `extension <deployment>`) and served from then
 //! on: dform plans a CRD-typed object against them at that tick, untyped
 //! in its own schema until the next run loads the cache. A Configure that
 //! names `kinds` (a CRD the program made at the last tick defines them,
@@ -40,6 +40,7 @@
 //! objects, an inventory's kinds), a poll's interval slept, so a wasm
 //! provider answers its other calls meanwhile.
 
+use crate::cache;
 use crate::cluster::{Cluster, WriteError};
 use crate::object::{
     HELD_ANNOTATION, KEY_ANNOTATION, STACK_LABEL, attrs, attrs_raw, base64, computed,
@@ -58,12 +59,8 @@ use dform_core::schema::Schema;
 use dform_core::value::Value;
 use dform_sdk::{Handler, join_all};
 use serde_json::{Value as Json, json};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
-/// The cluster's OpenAPI document, cached in the run's cache directory.
-const OPENAPI_CACHE: &str = "k8s-openapi.json";
 
 /// How long a delete waits for the object to go before it answers.
 const DELETE_WAIT: Duration = Duration::from_secs(60);
@@ -85,9 +82,6 @@ pub struct K8s {
 
 /// What a Configure asks of its session, read from its document.
 struct Asked {
-    /// The run's cache directory (`dform.state/cache/`), else beside the
-    /// world file.
-    cache: Option<PathBuf>,
     /// The deployment: what its objects are labelled with, and what its
     /// cluster's extension of the schema is cached under.
     stack: Option<String>,
@@ -110,9 +104,6 @@ impl Asked {
     fn of(config: &Json) -> Asked {
         let text = |k: &str| config.pointer(k).and_then(Json::as_str);
         Asked {
-            cache: text("/cache").map(PathBuf::from).or_else(|| {
-                text("/world").and_then(|w| std::path::Path::new(w).parent().map(PathBuf::from))
-            }),
             stack: text("/stack").map(stack_label).filter(|s| !s.is_empty()),
             settings: config.get("settings").cloned().unwrap_or(Json::Null),
             deferred: config.get("deferred") == Some(&Json::Bool(true)),
@@ -148,9 +139,9 @@ impl K8s {
     /// credential `kubeconfig:environment`, which the host opens for a
     /// provider the program does not configure where dform.toml grants it)
     /// and its schema, else offline on the snapshot, saying why (the grant
-    /// it lacks). `cache` is the directory the OpenAPI document and the
-    /// schema derived from it are cached in.
-    pub async fn configure(cache: Option<PathBuf>, kubeconfig: Option<&str>) -> Result<K8s> {
+    /// it lacks). The OpenAPI document is the run's when it has it, unless
+    /// `fresh` (`Cluster::openapi`).
+    pub async fn configure(kubeconfig: Option<&str>, fresh: bool) -> Result<K8s> {
         let why = if std::env::var_os("DFORM_K8S_OFFLINE").is_some_and(|v| !v.is_empty()) {
             "DFORM_K8S_OFFLINE is set".to_string()
         } else {
@@ -159,23 +150,20 @@ impl K8s {
                 .and_then(|name| Cluster::open(name, None));
             let (why, e) = match opened {
                 Err(e) => (e.to_string(), e),
-                Ok(c) => {
-                    let cached = cache.as_deref().map(|d| d.join(OPENAPI_CACHE));
-                    match c.openapi(cached.as_deref()).await {
-                        Ok(doc) => {
-                            let derived =
-                                openapi::cached(&doc.hash.clone(), cache.as_deref(), || {
-                                    openapi::derive(&doc.parse()?, &openapi::aliases()?)
-                                })?;
-                            return Ok(K8s {
-                                derived: Arc::new(derived),
-                                cluster: Ok(c),
-                                stack: None,
-                            });
-                        }
-                        Err(e) => (format!("the cluster at {} did not answer", c.url), e),
+                Ok(c) => match c.openapi(fresh).await {
+                    Ok(doc) => {
+                        let derived =
+                            openapi::cached(&doc.hash.clone(), cache::Scope::Account, || {
+                                openapi::derive(&doc.parse()?, &openapi::aliases()?)
+                            })?;
+                        return Ok(K8s {
+                            derived: Arc::new(derived),
+                            cluster: Ok(c),
+                            stack: None,
+                        });
                     }
-                }
+                    Err(e) => (format!("the cluster at {} did not answer", c.url), e),
+                },
             };
             say(
                 &format!(
@@ -187,7 +175,7 @@ impl K8s {
             why
         };
         Ok(K8s {
-            derived: Arc::new(openapi::snapshot_cached(cache.as_deref())?),
+            derived: Arc::new(openapi::snapshot_cached()?),
             cluster: Err(why),
             stack: None,
         })
@@ -198,12 +186,9 @@ impl K8s {
     /// static schema, extended by the kinds the deployment's cluster served
     /// when it was last configured (its CRDs, `openapi::read_extension`),
     /// until then, and nothing in the environment is contacted.
-    pub fn deferred(cache: Option<PathBuf>, stack: Option<&str>) -> Result<K8s> {
-        let base = openapi::snapshot_cached(cache.as_deref())?;
-        let ext = cache
-            .as_deref()
-            .zip(stack)
-            .and_then(|(c, s)| openapi::read_extension(&openapi::extension_path(c, s), None));
+    pub fn deferred(stack: Option<&str>) -> Result<K8s> {
+        let base = openapi::snapshot_cached()?;
+        let ext = stack.and_then(|s| openapi::read_extension(s, None));
         let derived = match ext {
             Some(ext) => openapi::extended(&base, &ext)?,
             None => base,
@@ -221,12 +206,12 @@ impl K8s {
     async fn asked(asked: &Asked) -> Result<K8s> {
         let k8s = match Cluster::configured(&asked.settings)? {
             Some(c) => K8s::program(asked, c).await?,
-            None if asked.deferred => K8s::deferred(asked.cache.clone(), asked.stack.as_deref())?,
+            None if asked.deferred => K8s::deferred(asked.stack.as_deref())?,
             None => {
                 let deadline = std::time::Instant::now() + KIND_WAIT;
                 loop {
-                    let k =
-                        K8s::configure(asked.cache.clone(), asked.kubeconfig.as_deref()).await?;
+                    let fresh = !asked.kinds.is_empty();
+                    let k = K8s::configure(asked.kubeconfig.as_deref(), fresh).await?;
                     if k.cluster.is_err()
                         || asked.served(&k)
                         || std::time::Instant::now() >= deadline
@@ -248,17 +233,17 @@ impl K8s {
     /// expects, and the static schema extended by them, so a CRD the
     /// run's schema lacks is planned against it at this tick (R-45).
     async fn program(asked: &Asked, c: Cluster) -> Result<K8s> {
-        if let (Some(dir), Some(s)) = (&asked.cache, &asked.stack) {
+        if let Some(s) = &asked.stack {
             let deadline = std::time::Instant::now() + KIND_WAIT;
             loop {
-                if let Err(e) = K8s::extend(&c, dir, s).await {
+                if let Err(e) = K8s::extend(&c, s, !asked.kinds.is_empty()).await {
                     say(
                         &format!("k8s: the schema of the cluster at {} is not cached", c.url),
                         &e,
                     );
                 }
                 if asked.kinds.is_empty()
-                    || asked.served(&K8s::deferred(asked.cache.clone(), Some(s))?)
+                    || asked.served(&K8s::deferred(Some(s))?)
                     || std::time::Instant::now() >= deadline
                 {
                     break;
@@ -266,24 +251,23 @@ impl K8s {
                 dform_sdk::sleep(Duration::from_secs(1)).await;
             }
         }
-        Ok(K8s::deferred(asked.cache.clone(), asked.stack.as_deref())?.with_cluster(c))
+        Ok(K8s::deferred(asked.stack.as_deref())?.with_cluster(c))
     }
 
     /// The program's cluster answered: cache the kinds it serves beyond the
     /// static schema (its CRDs), for this provider from now on and for the
     /// deployment's next run, which starts `deferred` again. Once per
     /// change of the cluster's document; a cluster that does not answer
-    /// keeps the cache it had.
-    async fn extend(cluster: &Cluster, cache: &std::path::Path, stack: &str) -> Result<()> {
-        let path = openapi::extension_path(cache, stack);
-        let doc = cluster.openapi(Some(&cache.join(OPENAPI_CACHE))).await?;
-        if openapi::read_extension(&path, Some(&doc.hash)).is_some() {
+    /// keeps the cache it had. The document is the run's unless `fresh`.
+    async fn extend(cluster: &Cluster, stack: &str, fresh: bool) -> Result<()> {
+        let doc = cluster.openapi(fresh).await?;
+        if openapi::read_extension(stack, Some(&doc.hash)).is_some() {
             return Ok(());
         }
         let hash = doc.hash.clone();
         let full = openapi::derive(&doc.parse()?, &openapi::aliases()?)?;
-        let base = openapi::snapshot_cached(Some(cache))?;
-        openapi::write_extension(&path, &hash, &openapi::extension(&full, &base)?)
+        let base = openapi::snapshot_cached()?;
+        openapi::write_extension(stack, &hash, &openapi::extension(&full, &base)?)
     }
 
     /// The program's configuration arrived (`Cluster::configured`): this

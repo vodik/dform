@@ -19,6 +19,7 @@ reach it, is a call to the host (`wit/host/dform-host.wit`, `dform:host`):
 | `ssh` | `exec` (argv, never a shell string), `write` a file, `forward` a port to a tunnel; keys from the operator's agent (a file is read through `io`) |
 | `git` | a commit onto a branch of a local repository (a file is read through `io`) |
 | `secrets` | open a credential by name: a handle, never the value |
+| `cache` | `get` and `put` what a provider keeps from one call to the next, by its key and how widely it holds (below) |
 | `log` | a line shown with dform's own output |
 
 A read of something the world has not reached yet (a file cloud-init has
@@ -60,6 +61,33 @@ names its limits (`Request::bucket("ec2.describe")`) and the window
 learns them. What a call awaits is the call's (paced in its session's
 windows, traced under its span), however many it awaits together; a
 thread it starts by itself is in no call.
+
+### The host's cache
+
+A provider that keeps what it fetched or derived (a cluster's OpenAPI
+documents, the schema it derives from them, an account's project ids)
+keeps it in the host's cache, by a key that names what it is
+(`openapi https://10.0.0.1:6443`) and how widely it holds, a scope:
+
+| scope | kept | shared by |
+|---|---|---|
+| `session` | in memory, for the run | the session's calls |
+| `run` | in memory, for the run | every session of the run (the deployments of a tree, one fetch for all) |
+| `account` | on disk, from run to run | the sessions of one account: what a session's first Configure names (its credentials, by name; one its program configures later, its project's); never read for another |
+| `provider` | on disk, from run to run | every account, this build of the provider only |
+
+The WIT names intent, the host owns policy: a provider names no path,
+no age and no size. Where (`~/.cache/dform/providers/PROVIDER/`, each
+account and each build in a directory named by a digest), how much
+(64 MiB in memory, 256 MiB on disk, 32 MiB an entry) and how long
+(30 days on disk, the least recently used let go first) are the host's,
+one policy for every provider. A get may miss whatever was put, so a
+provider answers the same either way, only slower. Each get and put is
+a `cache` span under its call, its scope and whether it hit its fields.
+A native provider's SDK names its session and account to the host
+(it runs as the user: a statement, not a wall); a component's host
+knows the call a get is made in. `dform_host::cache::forget` drops a
+provider's accounts' entries, for `dform update PROVIDER`.
 
 To place it: a Cloudflare Worker or a Fastly Compute service gets
 `fetch` and bindings and never a socket, and the platform pools its
@@ -428,9 +456,9 @@ its signer (`cargo xtask components` builds it with the fake and the
 OVH provider; `cargo xtask install` installs it where dform looks, so
 its table needs no `path`, docs/reference.md "Installing"). As a wasm
 provider it is granted the filesystem, which the language front-end
-that parses its schema links until the crate split, and in which it
-keeps what it derives from a cluster in the run's cache directory (the
-OpenAPI documents, the schema, a deployment's CRDs), as natively; its
+that parses its schema links until the crate split; what it derives
+from a cluster (the OpenAPI documents, the schema, a deployment's CRDs)
+it keeps in the host's cache (above), as natively; its
 kubeconfig is the host's either way, the environment's by the grant or
 the program's (`use k8s { kubeconfig }`):
 
@@ -623,4 +651,5 @@ host  wasm: credentials: kubeconfig:prod
 - A wasm component cannot declare a scheme yet: the wasm host does not
   call a component's `io` export (a native provider's `Io` is called).
 - A component's calls have an epoch deadline of an hour, a backstop
-  under the provider's `timeout`, which answers the engine first.
+  under the provider's `timeout`, which answers the engine first. A call
+  still running as the run ends is cancelled, its span ended saying so.

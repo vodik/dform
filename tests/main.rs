@@ -95,6 +95,7 @@ mod header_names;
 mod headers;
 mod held_reads;
 mod helper_flag;
+mod host_cache;
 mod host_grpc;
 mod host_pace;
 mod host_trace;

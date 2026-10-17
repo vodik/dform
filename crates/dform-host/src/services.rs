@@ -3,11 +3,11 @@
 //! service (`grpc`) and the component imports (`wasm`).
 
 use crate::signed::{self, Source, Steps};
-use crate::{git, http, ratelimit, ssh};
+use crate::{cache, git, http, ratelimit, ssh};
 use dform_core::plugin::credentials::{self, Credential};
 use dform_core::plugin::host::{
-    Calls, Endpoint, Error, Failure, GitFile, Grants, Handle, HttpRequest, HttpResponse, Level,
-    Opened, Run, Target,
+    CacheAt, Calls, Endpoint, Error, Failure, GitFile, Grants, Handle, HttpRequest, HttpResponse,
+    Level, Opened, Run, Target,
 };
 use dform_core::plugin::signer::{Material, Signer};
 use dform_core::plugin::timed;
@@ -42,6 +42,8 @@ pub struct Services {
     /// credentials and signs its requests with them, run apart from it
     /// (`crate::signed`).
     signer: OnceLock<Arc<dyn Signer + Send + Sync>>,
+    /// What it keeps from one call to the next (`dform:host/cache`).
+    cache: cache::Cache,
 }
 
 /// What a provider's calls opened, by handle.
@@ -72,7 +74,6 @@ impl Services {
     pub fn paced(grants: Grants, limiter: Arc<ratelimit::Limiter>) -> Services {
         Services {
             limiter,
-            grants,
             opened: Mutex::new(Held {
                 credentials: BTreeMap::new(),
                 tunnels: BTreeMap::new(),
@@ -82,7 +83,21 @@ impl Services {
             ssh: ssh::client(),
             git: git::Git::cache(),
             signer: OnceLock::new(),
+            cache: cache::Cache::new(&grants.provider, cache::root()),
+            grants,
         }
+    }
+
+    /// The same, its cache's files under `root` (tests).
+    pub fn with_cache_in(mut self, root: std::path::PathBuf) -> Services {
+        self.cache = cache::Cache::new(&self.grants.provider, Some(root));
+        self
+    }
+
+    /// What it keeps for its provider: told the provider's build by its
+    /// handshake, and a session's number once its Configure answers it.
+    pub fn cache(&self) -> &cache::Cache {
+        &self.cache
     }
 
     /// The same, with `ssh` as its SSH client (tests).
@@ -451,6 +466,42 @@ impl Calls for Services {
             Level::Error => "error",
         };
         eprintln!("provider {}: {level}: {message}", self.grants.provider);
+    }
+
+    /// What is kept at `key` where `at` says: a `cache` span, its scope
+    /// and whether it hit.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "cache",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} cache get", self.grants.provider),
+            provider = self.grants.provider.as_str(),
+            scope = at.scope.as_str(),
+            hit = tracing::field::Empty,
+        )
+    )]
+    fn cache_get(&self, at: &CacheAt, key: &str) -> Option<Vec<u8>> {
+        let got = self.cache.get(at, key);
+        tracing::Span::current().record("hit", got.is_some());
+        got
+    }
+
+    /// Keep `value` at `key` where `at` says: a `cache` span, its scope.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "cache",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} cache put", self.grants.provider),
+            provider = self.grants.provider.as_str(),
+            scope = at.scope.as_str(),
+        )
+    )]
+    fn cache_put(&self, at: &CacheAt, key: &str, value: Vec<u8>) {
+        self.cache.put(at, key, value);
     }
 }
 

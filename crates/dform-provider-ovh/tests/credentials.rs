@@ -11,7 +11,6 @@ use dform_provider_ovh::credential::notes;
 use dform_provider_ovh::fake::{self, Server};
 use dform_provider_ovh::ovh::Ovh;
 use serde_json::json;
-use std::path::PathBuf;
 
 fn lookup(env: Vec<(&'static str, String)>) -> impl Fn(&str) -> Option<String> {
     move |k| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone())
@@ -21,13 +20,6 @@ fn lookup(env: Vec<(&'static str, String)>) -> impl Fn(&str) -> Option<String> {
 fn client(server: &Server, env: Vec<(&'static str, String)>) -> Client {
     let held = config::Held::default();
     Client::new(config::resolve(Some(&server.endpoint), held, &lookup(env), &[]).unwrap())
-}
-
-fn scratch(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ovh-credentials-{name}"));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
 }
 
 /// A program's provider configured with a service account finds its
@@ -124,7 +116,7 @@ fn an_expired_consumer_key_says_so_and_the_fix() {
 }
 
 /// A consumer key that expires within a week is warned of, from the
-/// key's description, which a program's run keeps in the cache; one that
+/// key's description, which a program's run keeps in the host's cache; one that
 /// never expires is not. Outside a program the form, the validity and
 /// each missing right are said.
 #[test]
@@ -135,7 +127,6 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
         unreachable!("the fake's client signs");
     };
     let now = parse_rfc3339("2026-10-08T10:00:00Z").unwrap();
-    let cache = scratch("validity");
     server.key_expires(Some("2026-10-09T08:00:00+02:00"));
     let warning = format!(
         "warning: provider ovh: the consumer key for {} expires 2026-10-09T06:00:00Z, in 20 \
@@ -145,17 +136,17 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
         server.endpoint.strip_suffix("/1.0").unwrap()
     );
     assert_eq!(
-        dform_sdk::block_on(notes(&c, false, Some(&cache), now)),
+        dform_sdk::block_on(notes(&c, false, true, now)),
         std::slice::from_ref(&warning)
     );
     assert_eq!(
-        dform_sdk::block_on(notes(&c, false, Some(&cache), now)),
+        dform_sdk::block_on(notes(&c, false, true, now)),
         std::slice::from_ref(&warning)
     );
     assert_eq!(server.key_asked(), 1, "the second run reads the cache");
     // A week and more ahead: nothing to say.
     let later = parse_rfc3339("2026-10-01T00:00:00Z").unwrap();
-    assert!(dform_sdk::block_on(notes(&c, false, Some(&cache), later)).is_empty());
+    assert!(dform_sdk::block_on(notes(&c, false, true, later)).is_empty());
 
     // Outside a program: the form, the validity, what it lacks.
     server.key_rules(&[
@@ -166,7 +157,7 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
     ]);
     let e = &server.endpoint;
     assert_eq!(
-        dform_sdk::block_on(notes(&c, true, None, now)),
+        dform_sdk::block_on(notes(&c, true, false, now)),
         [
             format!(
                 "provider ovh: credentials for {e}: an application key and a consumer key, \
@@ -181,7 +172,7 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
     );
     server.key_expires(None);
     assert_eq!(
-        dform_sdk::block_on(notes(&c, true, None, now)),
+        dform_sdk::block_on(notes(&c, true, false, now)),
         [
             format!(
                 "provider ovh: credentials for {e}: an application key and a consumer key, \
@@ -195,7 +186,7 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
     // A service account's rights are not the API's to answer.
     let c = client(&server, server.oauth_env());
     assert_eq!(
-        dform_sdk::block_on(notes(&c, true, None, now)),
+        dform_sdk::block_on(notes(&c, true, false, now)),
         [format!(
             "provider ovh: credentials for {e}: the service account {}; its rights are its IAM \
              policies",
@@ -229,7 +220,7 @@ fn an_access_token_is_used_as_it_is() {
     let c = client(&server, server.token_env());
     let e = &server.endpoint;
     assert_eq!(
-        dform_sdk::block_on(notes(&c, true, None, 0)),
+        dform_sdk::block_on(notes(&c, true, false, 0)),
         [format!(
             "provider ovh: credentials for {e}: an access token, used as it is; its rights are \
              its own"

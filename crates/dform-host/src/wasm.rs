@@ -77,6 +77,8 @@ mod bindings {
         // which are traced in the span of the export it is opened in.
         imports: {
             "dform:host/secrets.open": store,
+            "dform:host/cache.get": store,
+            "dform:host/cache.put": store,
         },
         with: {
             "wasi:cli": wasmtime_wasi::p3::bindings::cli,
@@ -150,10 +152,30 @@ struct State {
     table: ResourceTable,
     host: Arc<Services>,
     outgoing: Outgoing,
-    /// The `provider.call` spans of the calls in flight, by their
-    /// export's task: an import finds its call's by the task it is made in
-    /// ([`made_in`]), so its spans are the call's children.
-    exports: std::collections::HashMap<GuestTaskId, tracing::Span>,
+    /// The calls in flight, by their export's task: an import finds its
+    /// call by the task it is made in ([`made_in`]), so its spans are the
+    /// call's children, and its cache entries the call's session's.
+    exports: std::collections::HashMap<GuestTaskId, Made>,
+    /// The account each session's first Configure named
+    /// (`host::account_of`), by the session its answer named.
+    accounts: BTreeMap<Session, String>,
+}
+
+/// A call in flight in the instance, as its imports see it: its
+/// `provider.call` span, its session (a Configure that opens one, a
+/// number of its own until it answers, [`provisional`]) and its account.
+#[derive(Clone)]
+struct Made {
+    span: tracing::Span,
+    session: Session,
+    account: String,
+}
+
+/// The session a Configure that opens one (its number unknown until it
+/// answers) keeps its session's cache entries under meanwhile: one no
+/// provider answers.
+fn provisional(t: Ticket) -> Session {
+    Session(u64::MAX - t.0)
 }
 
 impl WasiView for State {
@@ -358,13 +380,18 @@ impl<U> wh::secrets::HostWithStore<U> for HasSelf<State> {
 /// made for, the one its export's task was started in ([`State::exports`]),
 /// the root of the import's call stack; else the span the instance is in.
 fn made_in<U: 'static>(s: &mut Access<'_, U, HasSelf<State>>) -> tracing::Span {
+    call_of(s).map_or_else(tracing::Span::current, |m| m.span)
+}
+
+/// The call an import is made in ([`State::exports`]): the one its
+/// export's task is, the root of its call stack.
+fn call_of<U: 'static>(s: &mut Access<'_, U, HasSelf<State>>) -> Option<Made> {
     let root = s
         .as_context_mut()
         .async_call_stack()
         .ok()
         .and_then(|stack| stack.last());
     root.and_then(|root| s.get().exports.get(&root).cloned())
-        .unwrap_or_else(tracing::Span::current)
 }
 
 /// The host an import calls, and the span it is made in ([`made_in`]).
@@ -548,6 +575,48 @@ impl wh::git::Host for State {
             .git_commit(&repo, &branch, files, &message)
             .map_err(error)
     }
+}
+
+impl wh::cache::Host for State {}
+
+impl<U> wh::cache::HostWithStore<U> for HasSelf<State> {
+    /// What the host keeps at `key` in `scope` for the call it is asked
+    /// in: its session's, its account's ([`call_of`]), in its span.
+    fn get(mut s: Access<'_, U, Self>, scope: wh::cache::Scope, key: String) -> Option<Vec<u8>> {
+        let (at, span) = cache_at(&mut s, scope);
+        span.in_scope(|| s.get().host.cache_get(&at, &key))
+    }
+
+    fn put(mut s: Access<'_, U, Self>, scope: wh::cache::Scope, key: String, value: Vec<u8>) {
+        let (at, span) = cache_at(&mut s, scope);
+        span.in_scope(|| s.get().host.cache_put(&at, &key, value))
+    }
+}
+
+/// Where a cache import is made, by the call it is made in; outside one,
+/// no session and no account.
+fn cache_at<U: 'static>(
+    s: &mut Access<'_, U, HasSelf<State>>,
+    scope: wh::cache::Scope,
+) -> (h::CacheAt, tracing::Span) {
+    use wh::cache::Scope as S;
+    let made = call_of(s).unwrap_or(Made {
+        span: tracing::Span::current(),
+        session: Session::NONE,
+        account: String::new(),
+    });
+    let scope = match scope {
+        S::Session => h::Scope::Session,
+        S::Run => h::Scope::Run,
+        S::Account => h::Scope::Account,
+        S::Provider => h::Scope::Provider,
+    };
+    let at = h::CacheAt {
+        scope,
+        session: made.session,
+        account: made.account,
+    };
+    (at, made.span)
 }
 
 impl wh::log::Host for State {
@@ -858,6 +927,7 @@ impl Instance {
         wh::io::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::ssh::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::git::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
+        wh::cache::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::log::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         Ok(linker)
     }
@@ -893,6 +963,7 @@ impl Instance {
             outgoing: Outgoing(host.clone()),
             host,
             exports: Default::default(),
+            accounts: BTreeMap::new(),
         })
     }
 
@@ -1128,6 +1199,7 @@ impl Instance {
     /// ([`State::exports`]).
     async fn exported<P, R>(
         a: &Accessor<State>,
+        made: Made,
         f: TypedFunc<(P,), (R,)>,
         arg: P,
     ) -> wasmtime::Result<R>
@@ -1137,21 +1209,72 @@ impl Instance {
     {
         let started = a.with(|mut s| f.start_call_concurrent(s.as_context_mut(), (arg,)))?;
         let task = started.task();
-        Instance::traced(a, task, Some(tracing::Span::current()));
+        Instance::traced(a, task, Some(made));
         let answered = f.finish_call_concurrent(a, started).await;
         Instance::traced(a, task, None);
         Ok(answered?.0)
     }
 
-    /// The export's task `task` known by the span `span`, or (`None`) no
+    /// The export's task `task` known as the call `made`, or (`None`) no
     /// longer.
-    fn traced(a: &Accessor<State>, task: GuestTaskId, span: Option<tracing::Span>) {
+    fn traced(a: &Accessor<State>, task: GuestTaskId, made: Option<Made>) {
         a.with(|mut s| {
             let exports = &mut s.get().exports;
-            match span {
-                Some(span) => exports.insert(task, span),
+            match made {
+                Some(made) => exports.insert(task, made),
                 None => exports.remove(&task),
             }
+        });
+    }
+
+    /// `call` (ticket `t`) as its imports see it ([`Made`]), in the span
+    /// it runs in: a Configure's account the one its document names
+    /// (`host::account_of`) unless its session has one already, another
+    /// call's its session's.
+    fn made(a: &Accessor<State>, t: Ticket, call: &Call) -> Made {
+        let span = tracing::Span::current();
+        a.with(|mut s| {
+            let accounts = &s.get().accounts;
+            let (session, account) = match call {
+                Call::Configure(r) => {
+                    let named = Session(r.session);
+                    let session = match named {
+                        Session::NONE => provisional(t),
+                        s => s,
+                    };
+                    let account = accounts.get(&named).cloned().unwrap_or_else(|| {
+                        let config = r
+                            .config
+                            .as_ref()
+                            .and_then(|c| dform_core::plugin::wire::from_doc(c).ok());
+                        h::account_of(&config.unwrap_or_default())
+                    });
+                    (session, account)
+                }
+                call => {
+                    let session = call.session();
+                    (session, accounts.get(&session).cloned().unwrap_or_default())
+                }
+            };
+            Made {
+                span,
+                session,
+                account,
+            }
+        })
+    }
+
+    /// A Configure (ticket `t`) answered its session `session`: the
+    /// session's account is the one it named, when it is the first, and
+    /// what it kept meanwhile its session's ([`provisional`]).
+    fn configured(a: &Accessor<State>, t: Ticket, made: &Made, session: Session) {
+        a.with(|mut s| {
+            let state = s.get();
+            state
+                .accounts
+                .entry(session)
+                .or_insert_with(|| made.account.clone());
+            state.host.cache().opened(provisional(t), session);
         });
     }
 
@@ -1188,57 +1311,83 @@ impl Instance {
         call: &Call,
     ) -> wasmtime::Result<Result<Reply, CallError>> {
         let p = provider.dform_provider_provider();
-        Ok(match call {
+        let made = Instance::made(a, t, call);
+        let answer = match call {
             Call::Handshake(r) => answered(
-                Instance::exported(a, p.func_handshake(), conv::to_handshake_request(r)).await?,
+                Instance::exported(
+                    a,
+                    made.clone(),
+                    p.func_handshake(),
+                    conv::to_handshake_request(r),
+                )
+                .await?,
                 conv::from_handshake_response,
                 Reply::Handshake,
             ),
             Call::Configure(r) => answered(
-                Instance::exported(a, p.func_configure(), conv::to_configure_request(r)).await?,
+                Instance::exported(
+                    a,
+                    made.clone(),
+                    p.func_configure(),
+                    conv::to_configure_request(r),
+                )
+                .await?,
                 conv::from_configure_response,
                 Reply::Configure,
             ),
             Call::Schema(r) => answered(
-                Instance::exported(a, p.func_schema(), conv::to_schema_request(r)).await?,
+                Instance::exported(a, made.clone(), p.func_schema(), conv::to_schema_request(r))
+                    .await?,
                 conv::from_schema_response,
                 Reply::Schema,
             ),
             Call::Query(r) => answered(
-                Instance::exported(a, p.func_query(), conv::to_query_request(r)).await?,
+                Instance::exported(a, made.clone(), p.func_query(), conv::to_query_request(r))
+                    .await?,
                 |rows: &Vec<wp::Row>| conv::from_rows(rows),
                 Reply::Query,
             ),
             Call::Read(r) => answered(
-                Instance::exported(a, p.func_read(), conv::to_read_request(r)).await?,
+                Instance::exported(a, made.clone(), p.func_read(), conv::to_read_request(r))
+                    .await?,
                 conv::from_read_response,
                 Reply::Read,
             ),
             Call::Plan(r) => answered(
-                Instance::exported(a, p.func_plan(), conv::to_plan_request(r)).await?,
+                Instance::exported(a, made.clone(), p.func_plan(), conv::to_plan_request(r))
+                    .await?,
                 conv::from_plan_response,
                 Reply::Plan,
             ),
             Call::Apply(r) if r.op == pb::Op::Unspecified as i32 => {
                 Err(CallError::Refused("an Apply call with no op".to_string()))
             }
-            Call::Apply(r) => return self.apply(a, p, who, t, r).await,
+            Call::Apply(r) => return self.apply(a, p, who, t, made, r).await,
             Call::Import(r) => answered(
-                Instance::exported(a, p.func_import(), conv::to_import_request(r)).await?,
+                Instance::exported(a, made.clone(), p.func_import(), conv::to_import_request(r))
+                    .await?,
                 conv::from_import_response,
                 Reply::Import,
             ),
             Call::Reveal(r) => answered(
-                Instance::exported(a, p.func_reveal(), conv::to_reveal_request(r)).await?,
+                Instance::exported(a, made.clone(), p.func_reveal(), conv::to_reveal_request(r))
+                    .await?,
                 conv::from_reveal_response,
                 Reply::Reveal,
             ),
             Call::Health(r) => answered(
-                Instance::exported(a, p.func_health(), conv::to_health_request(r)).await?,
+                Instance::exported(a, made.clone(), p.func_health(), conv::to_health_request(r))
+                    .await?,
                 conv::from_health_response,
                 Reply::Health,
             ),
-        })
+        };
+        match &answer {
+            Ok(Reply::Configure(c)) => Instance::configured(a, t, &made, Session(c.session)),
+            Ok(Reply::Handshake(h)) => a.with(|mut s| s.get().host.cache().built(&h.version)),
+            _ => {}
+        }
+        Ok(answer)
     }
 
     /// An Apply's answer: its events told as the component writes them,
@@ -1249,6 +1398,7 @@ impl Instance {
         p: &bindings::exports::dform::provider::provider::Guest,
         who: &std::cell::RefCell<String>,
         t: Ticket,
+        made: Made,
         r: &pb::ApplyRequest,
     ) -> wasmtime::Result<Result<Reply, CallError>> {
         let f = p.func_apply();
@@ -1256,7 +1406,7 @@ impl Instance {
             f.start_call_concurrent(s.as_context_mut(), (conv::to_apply_request(r),))
         })?;
         let task = started.task();
-        Instance::traced(a, task, Some(tracing::Span::current()));
+        Instance::traced(a, task, Some(made));
         let (events, result) = f.finish_call_concurrent(a, started).await?.0;
         let (done, answer) = tokio::sync::oneshot::channel();
         a.with(|mut s| -> wasmtime::Result<()> {

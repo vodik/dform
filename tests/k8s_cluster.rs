@@ -146,6 +146,7 @@ fn dform(s: &Scratch, kubeconfig: &str, args: &[&str]) -> Run {
         .args(common::yes(args))
         .current_dir(&s.dir)
         .env("KUBECONFIG", kubeconfig)
+        .env("XDG_CACHE_HOME", s.path("xdg"))
         .env_remove("DFORM_K8S_OFFLINE")
         .output()
         .unwrap();
@@ -199,7 +200,7 @@ fn scratch(name: &str) -> Scratch {
 }
 
 /// Apply, then nothing to do; a change is a dry-run-planned update; the
-/// schema came from the cluster and is cached in dform.state/cache/.
+/// schema came from the cluster and is kept in the host's cache.
 #[test]
 fn applies_and_converges_on_a_cluster() {
     let Some(kc) = kubeconfig("applies_and_converges_on_a_cluster") else {
@@ -212,7 +213,7 @@ fn applies_and_converges_on_a_cluster() {
     assert!(!r.stderr.contains("offline"), "{}", r.stderr);
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
-    assert!(s.path("dform.state/cache/k8s-openapi.json").exists());
+    assert!(s.path("xdg/dform/providers/k8s").exists());
 
     s.write("p.df", &program(&ns.name, "nginx:1.28"));
     let r = dform(&s, &kc, &["plan", "p.df"]).success();

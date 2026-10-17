@@ -26,6 +26,7 @@ fn dform(s: &Scratch, server: &Server, args: &[&str]) -> Run {
         .current_dir(&s.dir)
         .env("HOME", &s.dir)
         .env("XDG_CONFIG_HOME", s.path("config"))
+        .env("XDG_CACHE_HOME", s.path("xdg"))
         .env_remove("OVH_CLOUD_PROJECT_SERVICE");
     for (k, v) in server.env() {
         c.env(k, v);
@@ -696,14 +697,17 @@ fn a_project_named_by_description_is_listed_once_and_its_id_kept() {
     let n = server.calls().len();
     dform(&s, &server, &["plan", "main.df"]).success();
     assert_eq!(asked(&server, n), std::slice::from_ref(&one));
-    // A kept id that no longer answers to the name is looked up again.
-    let kept = s.path("dform.state/cache/ovh-projects.json");
-    let text = std::fs::read_to_string(&kept).unwrap();
-    std::fs::write(
-        &kept,
-        text.replace(fake::PROJECT, "ffffffffffffffffffffffffffffffff"),
-    )
-    .unwrap();
+    // A kept id that no longer answers to the name is looked up again: the
+    // entry the host keeps of it (`dform_host::cache`) is changed.
+    let kept = kept_holding(&s.path("xdg/dform/providers/ovh"), fake::PROJECT);
+    let bytes = std::fs::read(&kept).unwrap();
+    let at = bytes
+        .windows(fake::PROJECT.len())
+        .rposition(|w| w == fake::PROJECT.as_bytes())
+        .unwrap();
+    let mut changed = bytes.clone();
+    changed[at..at + fake::PROJECT.len()].copy_from_slice(&[b'f'; 32]);
+    std::fs::write(&kept, changed).unwrap();
     let n = server.calls().len();
     dform(&s, &server, &["plan", "main.df"]).success();
     assert_eq!(
@@ -985,4 +989,27 @@ fn the_real_account_lists_its_regions() {
     for r in &rows {
         eprintln!("{r:?}");
     }
+}
+
+/// The file under `dir` (the host's cache of a provider) whose entry
+/// holds `text`.
+fn kept_holding(dir: &std::path::Path, text: &str) -> std::path::PathBuf {
+    let mut found = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if std::fs::read(&p)
+                .unwrap()
+                .windows(text.len())
+                .any(|w| w == text.as_bytes())
+            {
+                found.push(p);
+            }
+        }
+    }
+    assert_eq!(found.len(), 1, "{found:?}");
+    found.remove(0)
 }

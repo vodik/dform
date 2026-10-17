@@ -13,8 +13,9 @@ publish = false
 crate-type = ["rlib", "cdylib"]
 
 [features]
-# A wasm provider that keeps its cache in the cache directory (dform-k8s's
-# `cache`), relative to the host's working directory: `filesystem`.
+# A wasm provider keeps its cache in the host's (`dform:host/cache`); the
+# language front-end it links to parse its schema (dform-core's) imports
+# `wasi:filesystem` until the crate split: `filesystem`, granted.
 component = ["dform-sdk/component", "dform-sdk/filesystem"]
 
 [dependencies]

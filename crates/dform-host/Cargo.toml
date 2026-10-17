@@ -15,7 +15,7 @@ publish = false
 # interfaces as imports. Without it nothing here needs wasmtime or a wasm
 # target, and a `.wasm` source is refused naming the feature.
 [features]
-wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dform-wit", "dep:sha2", "dep:http", "dep:bytes", "dep:http-body-util"]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dform-wit", "dep:http", "dep:bytes", "dep:http-body-util"]
 
 [dependencies]
 anyhow = "1.0"
@@ -41,7 +41,7 @@ bytes = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 dform-wit = { path = "../dform-wit", default-features = false, features = ["host"], optional = true }
 # The compiled component's cache key.
-sha2 = { version = "0.10", optional = true }
+sha2 = "0.10"
 
 
 [dev-dependencies]

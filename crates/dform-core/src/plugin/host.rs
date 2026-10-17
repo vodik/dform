@@ -201,8 +201,71 @@ pub struct Opened {
     pub namespace: Option<String>,
 }
 
+/// How widely a cache entry holds (`dform:host/cache`'s `scope`): the
+/// provider says it; where, how much and how long are the host's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Scope {
+    /// The session's, in memory.
+    Session,
+    /// The run's, in memory, every session's.
+    Run,
+    /// On disk, from run to run, the session's account's.
+    Account,
+    /// On disk, from run to run, this build of the provider's.
+    Provider,
+}
+
+impl Scope {
+    /// As a trace names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::Session => "session",
+            Scope::Run => "run",
+            Scope::Account => "account",
+            Scope::Provider => "provider",
+        }
+    }
+}
+
+/// Where a cache get or put is made: its scope, the session of the call
+/// it is made in, and that session's account ([`account_of`]). A
+/// component's host tells the last two itself; a native provider's SDK
+/// names them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheAt {
+    pub scope: Scope,
+    pub session: super::backend::Session,
+    pub account: String,
+}
+
+/// The account a session is configured for, by its first Configure's
+/// document `config`: the credentials it is given, by name, sorted
+/// (`kubeconfig:prod`, `signed:lab`); a Configure given none (one its
+/// program configures later, `deferred`), its run's project (its `cache`
+/// directory). What a host keeps the session's account-level cache under:
+/// one account's entries are never read for another's.
+pub fn account_of(config: &serde_json::Value) -> String {
+    let mut names: Vec<&str> = config
+        .get("credentials")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|c| c.values())
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    match (
+        names.is_empty(),
+        config.get("cache").and_then(serde_json::Value::as_str),
+    ) {
+        (false, _) => names.join(","),
+        (true, Some(project)) => format!("project {project}"),
+        (true, None) => String::new(),
+    }
+}
+
 /// The host's interfaces as calls: `dform:host`'s `secrets`, `http`,
-/// `ssh`, `git` and `log`. dform serves them (`dform-host`); a provider
+/// `ssh`, `git`, `cache` and `log`. dform serves them (`dform-host`); a provider
 /// built with the SDK calls them over its transport. A provider's
 /// handlers run at once, so its calls do: each takes `&self`, and an
 /// implementation holds no lock across a call's I/O (R-142).
@@ -244,16 +307,28 @@ pub trait Calls: Send + Sync {
     ) -> Result<String, Error>;
     /// `log.log`.
     fn log(&self, level: Level, message: &str);
+    /// `cache.get`: what the host keeps at `key` where `at` says; by
+    /// default nothing (a host that keeps no cache).
+    fn cache_get(&self, at: &CacheAt, key: &str) -> Option<Vec<u8>> {
+        let _ = (at, key);
+        None
+    }
+    /// `cache.put`: keep `value` at `key` where `at` says; by default it
+    /// is not kept.
+    fn cache_put(&self, at: &CacheAt, key: &str, value: Vec<u8>) {
+        let _ = (at, key, value);
+    }
 }
 
 /// The host's own interfaces, by the names a manifest and a grant use.
-pub const HOST_INTERFACES: [&str; 7] = [
+pub const HOST_INTERFACES: [&str; 8] = [
     "dform:host/types",
     "dform:host/secrets",
     "dform:host/http",
     "dform:host/io",
     "dform:host/ssh",
     "dform:host/git",
+    "dform:host/cache",
     "dform:host/log",
 ];
 

@@ -174,8 +174,11 @@ fn host_of(cidr: &str, n: u32) -> Option<String> {
 /// provider's signer: set once, as the first fake starts.
 fn host() {
     use dform_core::plugin::host::Grants;
+    // What it keeps, in a cache of the process's own, never the user's.
+    let cache = std::env::temp_dir().join(format!("dform-ovh-fake-{}", std::process::id()));
     let services = dform_host::services::Services::new(Grants::none("ovh"))
-        .with_signer(Arc::new(dform_provider_ovh_signer::Ovh));
+        .with_signer(Arc::new(dform_provider_ovh_signer::Ovh))
+        .with_cache_in(cache);
     let _ = dform_sdk::set_host(Box::new(services));
 }
 

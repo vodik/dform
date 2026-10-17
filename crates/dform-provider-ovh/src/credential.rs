@@ -12,7 +12,6 @@ use crate::config::Auth;
 use dform_core::approval::{parse_rfc3339, rfc3339};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
-use std::path::Path;
 
 /// The calls the provider makes, as a consumer key's rights name them:
 /// a type that calls another path adds its line here and to
@@ -86,10 +85,10 @@ impl Key {
 /// The notes on `client`'s credentials, each a line for stderr. `full`
 /// (no program: `provider check`) says which form is in use, the key's
 /// validity and each right it lacks; otherwise only a short validity is
-/// warned of, and the key's expiry is kept in the cache directory `cache`
-/// (by the credential's name: the provider never has the key), so a
-/// later run asks nothing.
-pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec<String> {
+/// warned of, and a run's (`cached`) keeps the key's expiry (by a digest
+/// of the credential's name: the provider never has the key,
+/// `api::kept`), so a later run asks nothing.
+pub async fn notes(client: &Client, full: bool, cached: bool, now: u64) -> Vec<String> {
     let creds = client.credentials();
     let endpoint = &creds.endpoint;
     let signed = match &creds.auth {
@@ -125,8 +124,7 @@ pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) 
             };
         }
     };
-    let file = cache.filter(|_| !full).map(|c| c.join(api::CACHE_FILE));
-    let key = match current(client, signed, file.as_deref()).await {
+    let key = match current(client, signed, cached && !full).await {
         Ok(k) => k,
         // A refused key is said by the call that needs it.
         Err(e) if full => {
@@ -166,29 +164,31 @@ pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) 
 }
 
 /// The consumer key `client`'s calls are signed with, the credential
-/// `signed`: its expiry as `file` (a cache) keeps it for the credential's
-/// digest, else as the API answers, then kept.
-async fn current(client: &Client, signed: &str, file: Option<&Path>) -> api::Result<Key> {
-    let cache_key = format!("{} {CURRENT}", client.credentials().endpoint);
+/// `signed`: its expiry as a run (`cached`) kept it for the credential's
+/// digest ([`api::kept`]), else as the API answers, then kept.
+async fn current(client: &Client, signed: &str, cached: bool) -> api::Result<Key> {
+    let cache_key = format!("key {} {CURRENT}", client.credentials().endpoint);
     let digest: String = Sha256::digest(signed.as_bytes())[..8]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let kept = file.and_then(|f| {
-        let entry = api::read_cache(f).remove(&cache_key)?;
-        let (d, expires) = entry.split_once(' ')?;
-        (d == digest).then(|| Key {
-            expires: expires.parse().ok(),
-            rules: Vec::new(),
-        })
-    });
+    let kept = cached
+        .then(|| api::kept(&cache_key))
+        .flatten()
+        .and_then(|entry| {
+            let (d, expires) = entry.split_once(' ')?;
+            (d == digest).then(|| Key {
+                expires: expires.parse().ok(),
+                rules: Vec::new(),
+            })
+        });
     if let Some(k) = kept {
         return Ok(k);
     }
     let k = Key::from(&client.get(CURRENT).await?);
-    if let Some(f) = file {
+    if cached {
         let expires = k.expires.map_or("never".to_string(), |e| e.to_string());
-        api::write_cache(f, &cache_key, &format!("{digest} {expires}"));
+        api::keep(&cache_key, &format!("{digest} {expires}"));
     }
     Ok(k)
 }

@@ -218,6 +218,43 @@ interface git {
   commit: func(repo: string, branch: string, files: list<file>, message: string) -> result<string, error>;
 }
 
+// What a provider keeps from one call to the next, kept by the host
+// (the WIT names intent, the host owns policy): the provider says what a
+// thing is (its key) and how widely it holds (its scope), never a path,
+// an age or a size. The host owns where it is kept, how much and for how
+// long, as one policy (docs/providers.md, "The host's cache"); a get may
+// miss whatever was put, and a provider answers the same either way,
+// only slower.
+//
+// The host knows the call a get or a put is made in, so the session and
+// the account are the host's to tell, never the provider's to name: a
+// session's account is what its first Configure names (the credentials
+// it is given, by name; else its run's project), and one account's
+// entries are never read for another's.
+interface cache {
+  enum scope {
+    // This session's, in memory: gone with it (a list asked once per
+    // session).
+    session,
+    // The run's, in memory: every session of the run, on any account
+    // (what deployments of one run share, a cluster's documents fetched
+    // once).
+    run,
+    // On disk, from run to run, under the provider and the session's
+    // account (a cluster's documents and their hashes, an account's
+    // catalogues).
+    account,
+    // On disk, from run to run, every account's, kept for this build of
+    // the provider only (tables fixed by its code).
+    %provider,
+  }
+
+  // What is kept at `key` in `scope`, if anything.
+  get: func(scope: scope, key: string) -> option<list<u8>>;
+  // Keep `value` at `key` in `scope`, in place of what was.
+  put: func(scope: scope, key: string, value: list<u8>);
+}
+
 // What the provider wants the operator to see, with dform's own output.
 interface log {
   enum level {
@@ -378,6 +415,7 @@ world hosted-provider {
   import io;
   import ssh;
   import git;
+  import cache;
   import log;
   include wasi:cli/imports@0.3.0;
   import wasi:http/client@0.3.0;
