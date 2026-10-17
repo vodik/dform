@@ -19,8 +19,9 @@ Build it with the workspace (`cargo build --workspace` puts it at
 `dform.toml` until a registry serves it:
 
 ```toml
-[providers]
-ovh = { path = "~/src/dform/target/debug/dform-provider-ovh", timeout = "10m" }
+[providers.ovh]
+path = "~/src/dform/target/debug/dform-provider-ovh"
+timeout = "10m"
 ```
 
 `timeout` is how long dform waits for one call (60s by default). An
@@ -37,8 +38,10 @@ credentials are the keys the host signs with or the program's `token`
 front-end, which parses its schema, links it.
 
 ```toml
-[providers]
-ovh = { path = "target/wasm32-wasip3/release/dform_provider_ovh.wasm", allow = ["wasi:filesystem"], credentials = ["signed:environment"] }
+[providers.ovh]
+path = "target/wasm32-wasip3/release/dform_provider_ovh.wasm"
+allow = ["wasi:filesystem"]
+credentials = ["signed:environment"]
 ```
 
 The program names the account, never a credential:
