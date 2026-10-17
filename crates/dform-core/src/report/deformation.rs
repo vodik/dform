@@ -87,10 +87,23 @@ pub struct ListChange {
 /// `at` is the list before's).
 #[derive(Debug, Clone)]
 pub enum ListLine {
-    Keep { at: usize, value: Shown },
-    Insert { at: usize, value: Shown },
-    Remove { at: usize, value: Shown },
-    Change { at: usize, before: Shown, after: Shown },
+    Keep {
+        at: usize,
+        value: Shown,
+    },
+    Insert {
+        at: usize,
+        value: Shown,
+    },
+    Remove {
+        at: usize,
+        value: Shown,
+    },
+    Change {
+        at: usize,
+        before: Shown,
+        after: Shown,
+    },
 }
 
 /// A value given at creation only that the plan keeps (R-198): its line,
@@ -187,7 +200,10 @@ fn list_changes(list_edits: &ListDiffs, schema: &Schema, r: &Redactor) -> Vec<Li
         .iter()
         .map(|(path, (sensitive, ops))| ListChange {
             path: path.clone(),
-            ops: ops.iter().map(|op| list_line(*sensitive, op, schema, r)).collect(),
+            ops: ops
+                .iter()
+                .map(|op| list_line(*sensitive, op, schema, r))
+                .collect(),
         })
         .collect()
 }
@@ -195,9 +211,18 @@ fn list_changes(list_edits: &ListDiffs, schema: &Schema, r: &Redactor) -> Vec<Li
 fn list_line(sensitive: bool, op: &ListOp, schema: &Schema, r: &Redactor) -> ListLine {
     let v = |j: &Json| shown(Some(j), sensitive, schema, r);
     match op {
-        ListOp::Keep { at, value } => ListLine::Keep { at: *at, value: v(value) },
-        ListOp::Insert { at, value } => ListLine::Insert { at: *at, value: v(value) },
-        ListOp::Remove { at, value } => ListLine::Remove { at: *at, value: v(value) },
+        ListOp::Keep { at, value } => ListLine::Keep {
+            at: *at,
+            value: v(value),
+        },
+        ListOp::Insert { at, value } => ListLine::Insert {
+            at: *at,
+            value: v(value),
+        },
+        ListOp::Remove { at, value } => ListLine::Remove {
+            at: *at,
+            value: v(value),
+        },
         ListOp::Change { at, before, after } => ListLine::Change {
             at: *at,
             before: v(before),
@@ -210,9 +235,10 @@ fn list_line(sensitive: bool, op: &ListOp, schema: &Schema, r: &Redactor) -> Lis
 /// ordinary-list attributes (its per-index line prints in the list's
 /// whole-list block instead).
 fn in_list_edit(list_edits: &ListDiffs, path: &str) -> bool {
-    list_edits
-        .keys()
-        .any(|k| path.strip_prefix(k.as_str()).is_some_and(|rest| rest.starts_with('[')))
+    list_edits.keys().any(|k| {
+        path.strip_prefix(k.as_str())
+            .is_some_and(|rest| rest.starts_with('['))
+    })
 }
 
 /// What an action's change lines are printed with.

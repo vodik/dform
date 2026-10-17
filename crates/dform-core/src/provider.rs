@@ -483,10 +483,23 @@ fn key_fields(keys: &[String], x: &Json) -> Value {
 /// the one before (`before`) for `Remove`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListOp {
-    Keep { at: usize, value: Json },
-    Insert { at: usize, value: Json },
-    Remove { at: usize, value: Json },
-    Change { at: usize, before: Json, after: Json },
+    Keep {
+        at: usize,
+        value: Json,
+    },
+    Insert {
+        at: usize,
+        value: Json,
+    },
+    Remove {
+        at: usize,
+        value: Json,
+    },
+    Change {
+        at: usize,
+        before: Json,
+        after: Json,
+    },
 }
 
 /// Every ordinary (unkeyed, non-`set`) list attribute of `typ` whose
@@ -544,13 +557,14 @@ fn walk_list_diffs(
             let label_of = |v: &Json| -> Option<String> {
                 match keys {
                     Some(ks) => crate::report::fold::label(ks, &key_fields(ks, v)),
-                    None => Some(format!("#{}", short_hash(&serde_json::to_string(v).unwrap_or_default()))),
+                    None => Some(format!(
+                        "#{}",
+                        short_hash(&serde_json::to_string(v).unwrap_or_default())
+                    )),
                 }
             };
-            let bmap: BTreeMap<String, &Json> = xb
-                .iter()
-                .filter_map(|v| Some((label_of(v)?, v)))
-                .collect();
+            let bmap: BTreeMap<String, &Json> =
+                xb.iter().filter_map(|v| Some((label_of(v)?, v))).collect();
             for v in xa {
                 let Some(l) = label_of(v) else { continue };
                 let Some(bv) = bmap.get(&l) else { continue };
@@ -731,12 +745,30 @@ type_attr(k8s.np, "spec.ref.name", "string", ["required"])
         assert_eq!(
             ops,
             vec![
-                ListOp::Keep { at: 0, value: json!("a") },
-                ListOp::Keep { at: 1, value: json!("b") },
-                ListOp::Insert { at: 2, value: json!("x") },
-                ListOp::Keep { at: 3, value: json!("c") },
-                ListOp::Keep { at: 4, value: json!("d") },
-                ListOp::Keep { at: 5, value: json!("e") },
+                ListOp::Keep {
+                    at: 0,
+                    value: json!("a")
+                },
+                ListOp::Keep {
+                    at: 1,
+                    value: json!("b")
+                },
+                ListOp::Insert {
+                    at: 2,
+                    value: json!("x")
+                },
+                ListOp::Keep {
+                    at: 3,
+                    value: json!("c")
+                },
+                ListOp::Keep {
+                    at: 4,
+                    value: json!("d")
+                },
+                ListOp::Keep {
+                    at: 5,
+                    value: json!("e")
+                },
             ]
         );
     }
@@ -751,10 +783,24 @@ type_attr(k8s.np, "spec.ref.name", "string", ["required"])
         assert_eq!(
             ops,
             vec![
-                ListOp::Keep { at: 0, value: json!("a") },
-                ListOp::Change { at: 1, before: json!("b"), after: json!("x") },
-                ListOp::Change { at: 2, before: json!("c"), after: json!("y") },
-                ListOp::Keep { at: 3, value: json!("d") },
+                ListOp::Keep {
+                    at: 0,
+                    value: json!("a")
+                },
+                ListOp::Change {
+                    at: 1,
+                    before: json!("b"),
+                    after: json!("x")
+                },
+                ListOp::Change {
+                    at: 2,
+                    before: json!("c"),
+                    after: json!("y")
+                },
+                ListOp::Keep {
+                    at: 3,
+                    value: json!("d")
+                },
             ]
         );
     }
@@ -768,9 +814,18 @@ type_attr(k8s.np, "spec.ref.name", "string", ["required"])
         assert_eq!(
             ops,
             vec![
-                ListOp::Keep { at: 0, value: json!("a") },
-                ListOp::Remove { at: 1, value: json!("b") },
-                ListOp::Keep { at: 1, value: json!("c") },
+                ListOp::Keep {
+                    at: 0,
+                    value: json!("a")
+                },
+                ListOp::Remove {
+                    at: 1,
+                    value: json!("b")
+                },
+                ListOp::Keep {
+                    at: 1,
+                    value: json!("c")
+                },
             ]
         );
     }
@@ -785,10 +840,22 @@ type_attr(k8s.np, "spec.ref.name", "string", ["required"])
         assert_eq!(
             ops,
             vec![
-                ListOp::Keep { at: 0, value: json!("a") },
-                ListOp::Insert { at: 1, value: json!("x") },
-                ListOp::Insert { at: 2, value: json!("y") },
-                ListOp::Keep { at: 3, value: json!("z") },
+                ListOp::Keep {
+                    at: 0,
+                    value: json!("a")
+                },
+                ListOp::Insert {
+                    at: 1,
+                    value: json!("x")
+                },
+                ListOp::Insert {
+                    at: 2,
+                    value: json!("y")
+                },
+                ListOp::Keep {
+                    at: 3,
+                    value: json!("z")
+                },
             ]
         );
     }
@@ -804,10 +871,23 @@ type_attr(k8s.np, "spec.ref.name", "string", ["required"])
         assert_eq!(
             ops,
             vec![
-                ListOp::Keep { at: 0, value: json!("a") },
-                ListOp::Change { at: 1, before: json!("m"), after: json!("x") },
-                ListOp::Insert { at: 2, value: json!("y") },
-                ListOp::Keep { at: 3, value: json!("z") },
+                ListOp::Keep {
+                    at: 0,
+                    value: json!("a")
+                },
+                ListOp::Change {
+                    at: 1,
+                    before: json!("m"),
+                    after: json!("x")
+                },
+                ListOp::Insert {
+                    at: 2,
+                    value: json!("y")
+                },
+                ListOp::Keep {
+                    at: 3,
+                    value: json!("z")
+                },
             ]
         );
     }
@@ -842,9 +922,19 @@ type_attr(k8s.deployment, "spec.containers.args", "list(string)", [])
         assert_eq!(
             ops,
             &vec![
-                ListOp::Keep { at: 0, value: json!("a") },
-                ListOp::Change { at: 1, before: json!("b"), after: json!("x") },
-                ListOp::Keep { at: 2, value: json!("c") },
+                ListOp::Keep {
+                    at: 0,
+                    value: json!("a")
+                },
+                ListOp::Change {
+                    at: 1,
+                    before: json!("b"),
+                    after: json!("x")
+                },
+                ListOp::Keep {
+                    at: 2,
+                    value: json!("c")
+                },
             ]
         );
     }

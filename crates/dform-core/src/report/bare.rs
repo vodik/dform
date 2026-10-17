@@ -310,7 +310,12 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
 
 /// An ordinary list's whole value (R-111 round 2), as [`lines::write_list_change`]
 /// but to a plain string: no site column at `--why=none`.
-fn write_list_change(out: &mut String, lc: &super::deformation::ListChange, indent: &str, style: Style) {
+fn write_list_change(
+    out: &mut String,
+    lc: &super::deformation::ListChange,
+    indent: &str,
+    style: Style,
+) {
     use super::deformation::ListLine;
     out.push_str(&format!("{indent}{} = [\n", lc.path));
     let base = format!("{indent}  ");
@@ -330,7 +335,8 @@ fn write_list_change(out: &mut String, lc: &super::deformation::ListChange, inde
         let run = &lc.ops[start..i];
         let needed = usize::from(start > 0) + usize::from(i < lc.ops.len());
         if !elide || run.len() <= needed {
-            run.iter().for_each(|op| bare_list_line(out, op, &base, style));
+            run.iter()
+                .for_each(|op| bare_list_line(out, op, &base, style));
             continue;
         }
         if start > 0 {

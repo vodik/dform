@@ -46,7 +46,11 @@ resource k8s.deployment traefik {{
 }
 
 fn plan(s: &Scratch) -> common::Run {
-    s.run(&common::on("p.df", &["--provider", "k8s", "--world", "w.json"], &["plan"]))
+    s.run(&common::on(
+        "p.df",
+        &["--provider", "k8s", "--world", "w.json"],
+        &["plan"],
+    ))
 }
 
 /// Thirteen args with one inserted at index 7 (notes.org item 82, the
@@ -57,8 +61,12 @@ fn plan(s: &Scratch) -> common::Run {
 fn one_element_inserted_prints_one_plus_line_between_its_neighbours() {
     let s = Scratch::new("list-diffs-insert");
     s.write("p.df", &deployment(&ARGS));
-    s.run(&common::on("p.df", &["--provider", "k8s", "--world", "w.json"], &["apply"]))
-        .success();
+    s.run(&common::on(
+        "p.df",
+        &["--provider", "k8s", "--world", "w.json"],
+        &["apply"],
+    ))
+    .success();
 
     let mut after = ARGS.to_vec();
     after.insert(7, "--entrypoints.ssh.address=:2222");
@@ -77,7 +85,8 @@ fn one_element_inserted_prints_one_plus_line_between_its_neighbours() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("\n        + \"--entrypoints.ssh.address=:2222\"\n"),
+        r.stdout
+            .contains("\n        + \"--entrypoints.ssh.address=:2222\"\n"),
         "{}",
         r.stdout
     );
@@ -98,8 +107,12 @@ fn one_element_inserted_prints_one_plus_line_between_its_neighbours() {
 fn two_elements_changed_in_place_print_two_tilde_lines() {
     let s = Scratch::new("list-diffs-change");
     s.write("p.df", &deployment(&ARGS));
-    s.run(&common::on("p.df", &["--provider", "k8s", "--world", "w.json"], &["apply"]))
-        .success();
+    s.run(&common::on(
+        "p.df",
+        &["--provider", "k8s", "--world", "w.json"],
+        &["apply"],
+    ))
+    .success();
 
     let mut after = ARGS.to_vec();
     after[4] = "--entrypoints.web.address=:8080";
@@ -153,16 +166,18 @@ resource k8s.deployment api {
 }
 "#,
     );
-    s.run(&common::on("p.df", &["--provider", "k8s", "--world", "w.json"], &["apply"]))
-        .success();
-    s.write(
+    s.run(&common::on(
         "p.df",
-        &s.read("p.df").replace("envoy:1", "envoy:2"),
-    );
+        &["--provider", "k8s", "--world", "w.json"],
+        &["apply"],
+    ))
+    .success();
+    s.write("p.df", &s.read("p.df").replace("envoy:1", "envoy:2"));
     let r = plan(&s).success();
     assert!(
-        r.stdout
-            .contains(r#"spec.template.spec.containers[name=sidecar].image = "envoy:1" → "envoy:2""#),
+        r.stdout.contains(
+            r#"spec.template.spec.containers[name=sidecar].image = "envoy:1" → "envoy:2""#
+        ),
         "{}",
         r.stdout
     );
