@@ -845,3 +845,57 @@ fn the_tailscale_component_traces_as_its_native_build_does() {
     );
     assert_eq!(component, native);
 }
+
+/// The Vault provider as a wasm provider, beside the workspace's target.
+fn vault_component() -> String {
+    built(
+        "dform_provider_vault.wasm",
+        "cargo build -p dform-provider-vault --release --target wasm32-wasip3 --features \
+         component",
+    )
+}
+
+/// The Vault provider built as a wasm provider (`cargo xtask
+/// components`) configures through the host: no filesystem (it declares
+/// no resource types, so its schema links no front-end), no credential
+/// needed yet (Configure makes no request of its own; the token is
+/// applied to a later read, which the host's `send` would attach).
+///
+/// Its distinguishing feature, reading its own location scheme
+/// (`vault://`), is not reachable through a wasm provider yet: a
+/// native provider's schemes reach the engine over gRPC's separate
+/// `Manifest` and `Reader` RPCs (`crates/dform-host/src/launch.rs`'s
+/// `native`, `conn.manifest()` and `conn.reader()`), which
+/// `crates/dform-core/src/plugin/providers/start.rs`'s
+/// `into_providers` registers with the run's reader only when
+/// `link.reader.is_some()`; `dform_host::wasm::link` never sets
+/// `Link::schemes` or `Link::reader` (`crates/dform-host/src/wasm.rs`
+/// has no `Transport` impl), and the WIT's `handshake-response`
+/// (`wit/dform-provider.wit`) carries no `schemes` field a component
+/// could declare one in. `io.read("vault://..")` against the wasm
+/// provider refuses with "no transport reads `vault:`" today (checked
+/// by hand: `dform.toml` naming it, `use vault { address }`, no
+/// `[providers] fake`), even though `dform provider check` on it
+/// conforms. Filed as a new issue (dform-host and dform-core's
+/// `plugin/providers` and `plugin/link.rs` are other agents'): a
+/// component-carried scheme interface, in the shape of the WIT
+/// formalisation ticket's five items.
+#[test]
+fn the_vault_component_configures_through_the_host() {
+    use dform::plugin::backend::Session;
+    use dform::plugin::host::Grants;
+    use dform::plugin::wire;
+    let vault = vault_component();
+    let server = dform_provider_vault::fake::Server::start();
+    dform_host::wasm::compile_cache(wasm_cache());
+    let mut link =
+        dform_host::wasm::link(std::path::Path::new(&vault), Grants::none("vault")).unwrap();
+    let settings = serde_json::json!({"settings": {
+        "address": server.address(),
+    }});
+    let configured = link.configure(Session::NONE, wire::doc(&settings)).unwrap();
+    assert_eq!(
+        configured.account.as_deref(),
+        Some(server.address().as_str())
+    );
+}

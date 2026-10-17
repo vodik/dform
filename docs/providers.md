@@ -417,8 +417,8 @@ on both; tests/host_wasm.rs keeps them from drifting.
 | provider | written with | hosted | page |
 |---|---|---|---|
 | `postgres` (`crates/dform-provider-postgres`) | the SDK's typed layer | native only: it dials the server itself | docs/providers/postgres.md |
-| `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
-| `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native: every request through the host's HTTP client | docs/providers/tailscale.md |
+| `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native, or a wasm provider (no grant: it declares no resource type, so its schema links no front-end): every request through the host's HTTP client | docs/providers/vault.md |
+| `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native, or a wasm provider (granted `wasi:filesystem` until the crate split): every request through the host's HTTP client | docs/providers/tailscale.md |
 | `ovh` (`crates/dform-provider-ovh`) | the SDK's `Handler` directly, and a signer (`crates/dform-provider-ovh/signer`) | native, or a component (granted `wasi:filesystem` until the crate split) carrying its signer's: every request through the host's HTTP client, signed by its signer (`signed`) or with the program's token | docs/providers/ovh.md |
 | `k8s` (`crates/dform-k8s`, built by `crates/dform-provider-k8s`) | the SDK's `Handler` directly, a thin client of the Kubernetes API, and a signer (`crates/dform-provider-k8s/signer`) | native, or a wasm provider (granted `wasi:filesystem`, below) carrying its signer's component: every request through the host's HTTP client, its kubeconfig a credential the host holds, which the signer makes | docs/reference.md, "The Kubernetes provider" |
 
@@ -440,6 +440,35 @@ path = "target/wasm32-wasip3/release/dform_provider_k8s.wasm"
 allow = ["wasi:filesystem"]
 credentials = ["kubeconfig:environment"]
 ```
+
+Tailscale and Vault are bearer-token HTTP providers, with no signer to
+carry: `cargo build --target wasm32-wasip3 -p dform-provider-tailscale
+--features component` (and `-vault`) makes
+`dform_provider_tailscale.wasm` and `dform_provider_vault.wasm`;
+`cargo xtask components` and `cargo xtask install` build and install
+both the same way they do the fake, OVH and Kubernetes providers. The
+Tailscale provider's schema (its resource types, `Typed::facts_text`)
+links dform-core's language front-end as the OVH and Kubernetes
+providers' do, so it is granted the filesystem until the crate split;
+the Vault provider declares no resource type (a scheme and nothing
+else), so its wasm build links none of that front-end and needs no
+grant at all. Each provider's own credential (`credential =
+"bearer:tailscale"`, `token = "bearer:vault"`) is the host's either
+way, never the OAuth client or API key environment variables a native
+build also reads (a component has no environment).
+
+The Vault provider's own feature, reading its `vault://` scheme, is
+not reachable through a wasm provider yet: a native provider's schemes
+reach the engine over gRPC's separate `Manifest` and `Reader` RPCs
+(below), and the WIT has a `scheme-provider` world for exactly this (a
+hosted provider that additionally exports `io`), but the SDK's
+component build does not yet export it, and the host does not yet
+turn a component's declared schemes into the run's reader. Until then
+a wasm Vault provider configures through the host like any other, and
+`dform provider check` on it conforms, but `io.read("vault://..")`
+against it refuses with "no transport reads `vault:`" (tests/host_wasm.rs
+tests the Configure alone; the gap is filed on the WIT formalisation
+ticket, Phase 9).
 
 ## Grants and credentials
 
