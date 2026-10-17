@@ -185,6 +185,45 @@ fn examples() -> Vec<String> {
     names
 }
 
+/// Every provider an example's `dform.toml` names resolves from the
+/// example's own directory exactly as a plan resolves it: `provider list`
+/// names it and `provider schema NAME` succeeds. `provider schema` once
+/// had a second lookup path of its own (it passed the bare project name
+/// straight to the provider backend instead of the manifest's resolved
+/// source); this guards against that path coming back.
+#[test]
+fn every_examples_provider_schema_resolves() {
+    for name in examples() {
+        let dir = repo().join("examples").join(&name);
+        let manifest = dform_core::project::Manifest::load(
+            &dir.join(dform_core::project::MANIFEST),
+            env!("CARGO_PKG_VERSION"),
+        )
+        .unwrap_or_else(|e| panic!("examples/{name}/dform.toml: {e}"));
+        if manifest.providers.is_empty() {
+            continue;
+        }
+        let s = Scratch::in_target("examples", &format!("{name}-provider-schema"));
+        copy_dir(&dir, &s.dir);
+        let list = s.run(&["provider", "list"]).success();
+        for provider in manifest.providers.keys() {
+            assert!(
+                list.stdout
+                    .lines()
+                    .any(|l| l.split_whitespace().next() == Some(provider.as_str())),
+                "examples/{name}: provider list does not name {provider}:\n{}",
+                list.stdout
+            );
+            let r = s.run(&["provider", "schema", provider]);
+            assert!(
+                r.ok,
+                "examples/{name}: provider schema {provider} failed\n{}{}",
+                r.stdout, r.stderr
+            );
+        }
+    }
+}
+
 #[test]
 fn every_example_has_a_case() {
     for name in examples() {

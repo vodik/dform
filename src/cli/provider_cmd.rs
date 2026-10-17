@@ -39,6 +39,20 @@ impl ProviderList {
     }
 }
 
+/// The provider `name` as `--provider` takes it: the project's manifest
+/// entry of that name ([`project::Manifest::provider_source`], the same
+/// resolution a plan's `use`s go through), else `name` itself, outside a
+/// project or for one the manifest does not name.
+fn resolved(name: &str) -> Result<String> {
+    Ok(match Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))? {
+        Some(project) => project
+            .manifest
+            .provider_source(name)
+            .unwrap_or_else(|| name.to_string()),
+        None => name.to_string(),
+    })
+}
+
 /// Where the provider `name` comes from, and its executable or schema.
 fn row(name: &str, located: Option<Located>) -> (String, String) {
     match located {
@@ -104,11 +118,8 @@ pub(super) struct ProviderSchema {
 
 impl ProviderSchema {
     pub(super) fn run(&self) -> Result<Outcome> {
-        let backend = Providers::start(
-            launch(),
-            std::slice::from_ref(&self.provider),
-            &plugin::Config::default(),
-        )?;
+        let spec = resolved(&self.provider)?;
+        let backend = Providers::start(launch(), std::slice::from_ref(&spec), &plugin::Config::default())?;
         for a in &backend.schema().facts {
             println!("{}", spell::atom(a));
         }
