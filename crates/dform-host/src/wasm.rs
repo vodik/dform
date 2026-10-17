@@ -12,6 +12,13 @@
 //! a backstop under the link's own timeout (`plugin::timed`): a call past
 //! it is `MaybeApplied` for an Apply, `Refused` otherwise.
 //!
+//! The run's end stops the instance ([`Wasm::stop`]): every call still in
+//! flight in it (one the link gave up on at its timeout) is cancelled,
+//! its span ended with the cancellation on it, and the instance's thread
+//! is joined, so a call's span, and every span above it, is in the trace
+//! the run writes. A component busy in its own code when stopped is
+//! interrupted at the epoch's next tick.
+//!
 //! Grants, not walls: the host's own interfaces are imports any component
 //! has; a component that imports `wasi:sockets` or `wasi:http` is refused
 //! unless dform.toml grants it, naming both, and one that imports
@@ -46,15 +53,16 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::Instrument;
 use wasmtime::component::{
     Access, Accessor, Component, ComponentNamedList, FutureConsumer, GuestTaskId, HasSelf, Lift,
     Linker, Lower, Resource, ResourceTable, Source, StreamConsumer, StreamResult, TypedFunc,
 };
-use wasmtime::{AsContextMut, Config, Engine, Store, StoreContextMut};
+use wasmtime::{AsContextMut, Config, Engine, Store, StoreContextMut, UpdateDeadline};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
@@ -107,6 +115,8 @@ const TICK: Duration = Duration::from_millis(100);
 /// interrupted. The link's timeout (`[providers.NAME] timeout`) answers the
 /// engine long before; this stops the instance spinning after it.
 const DEADLINE: Duration = Duration::from_secs(3600);
+/// How long the run's end waits for a stopped instance's thread.
+const JOIN: Duration = Duration::from_secs(5);
 
 /// The engine every component runs on, its epoch ticking.
 fn engine() -> Result<&'static Engine> {
@@ -719,6 +729,30 @@ pub struct Wasm {
     dead: Arc<Mutex<Option<String>>>,
     /// Calls refused before they were sent (it had trapped).
     refused: Vec<(Ticket, CallError)>,
+    /// Stops the instance, from any thread ([`Wasm::stop`]).
+    stop: Stopping,
+    /// The instance's thread, joined as the provider is dropped.
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// How the instance is stopped: a flag its epoch's callback reads (a
+/// component busy in its own code), and a wake for its thread (one
+/// waiting on its calls).
+#[derive(Clone, Default)]
+struct Stopping {
+    stopped: Arc<AtomicBool>,
+    wake: Arc<tokio::sync::Notify>,
+}
+
+impl Stopping {
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.wake.notify_one();
+    }
+
+    fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
+    }
 }
 
 impl Wasm {
@@ -741,6 +775,7 @@ impl Wasm {
         let (tx, back) = std::sync::mpsc::channel();
         let (ready, started) = std::sync::mpsc::channel();
         let dead = Arc::new(Mutex::new(None));
+        let stop = Stopping::default();
         let instance = Instance {
             program: program.clone(),
             started_in: tracing::Span::current(),
@@ -748,9 +783,10 @@ impl Wasm {
             grants,
             limiter,
             dead: dead.clone(),
+            stop: stop.clone(),
             tx,
         };
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("dform-wasm".into())
             .spawn(move || instance.run(engine, component, rx, ready))
             .context("start the wasm provider's thread")?;
@@ -765,9 +801,29 @@ impl Wasm {
                 next: 0,
                 dead,
                 refused: Vec::new(),
+                stop,
+                thread: Some(thread),
             },
             manifest,
         ))
+    }
+
+    /// Stop the instance: every call in flight in it answered as
+    /// cancelled, its span ended, and the thread let go of the store.
+    fn stop(&mut self) {
+        self.stop.stop();
+        self.calls.take();
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let deadline = Instant::now() + JOIN;
+        while !thread.is_finished() {
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let _ = thread.join();
     }
 }
 
@@ -784,6 +840,8 @@ struct Instance {
     /// What its host paces its requests by ([`crate::ratelimit::Paced`]).
     limiter: Arc<Limiter>,
     dead: Arc<Mutex<Option<String>>>,
+    /// Whether the run's end stopped it, and the wake that says so.
+    stop: Stopping,
     tx: std::sync::mpsc::Sender<Back>,
 }
 
@@ -920,14 +978,24 @@ impl Instance {
         linked: &bindings::HostedProviderPre<State>,
     ) -> Result<(Store<State>, bindings::HostedProvider)> {
         let mut store = Store::new(engine, self.state()?);
-        store.set_epoch_deadline(ticks(DEADLINE));
+        // Checked each tick the component runs its own code: past the
+        // deadline, or stopped, it is interrupted.
+        let (stop, until) = (self.stop.clone(), Instant::now() + DEADLINE);
+        store.epoch_deadline_callback(move |_| {
+            Ok(match stop.stopped() || Instant::now() >= until {
+                true => UpdateDeadline::Interrupt,
+                false => UpdateDeadline::Continue(1),
+            })
+        });
+        store.set_epoch_deadline(1);
         let provider = linked.instantiate_async(&mut store).await?;
         Ok((store, provider))
     }
 
     /// Run every call `calls` brings at once, until dform drops the
-    /// provider (`calls` ends) or the instance traps; then answer every
-    /// call left as crashed ([`Instance::died`]).
+    /// provider (`calls` ends), stops it ([`Instance::cancelled`]) or the
+    /// instance traps; then answer every call left as crashed
+    /// ([`Instance::died`]).
     async fn answer_all(
         &self,
         mut store: Store<State>,
@@ -942,8 +1010,12 @@ impl Instance {
             .run_concurrent(async |a| self.run_calls(a, &provider, &who, &open, &mut calls).await)
             .await;
         let trapped = match ran {
-            Ok(None) => return,
-            Ok(Some(trapped)) => Some(trapped),
+            _ if self.stop.stopped() => {
+                return self.cancelled(&who.into_inner(), open.into_inner());
+            }
+            Ok(Ended::Dropped) => return,
+            Ok(Ended::Stopped) => unreachable!("stopped is checked first"),
+            Ok(Ended::Trapped(trapped)) => Some(trapped),
             Err(trap) => {
                 let t = open.borrow().keys().next().copied();
                 t.map(|t| (t, false, trap))
@@ -953,18 +1025,34 @@ impl Instance {
             .await;
     }
 
+    /// The run's end stopped the instance: each call still `open` answered
+    /// as cancelled (an Apply's as one that may have taken effect), its
+    /// span ended with the cancellation on it, and no call taken again.
+    fn cancelled(&self, who: &str, open: BTreeMap<Ticket, Open>) {
+        let why = format!("the provider {who} was stopped as the run ended");
+        *self.dead.lock().unwrap_or_else(|e| e.into_inner()) = Some(why.clone());
+        for (t, Open { span, apply }) in open {
+            span.record("error.type", "cancelled");
+            let e = match apply {
+                true => CallError::MaybeApplied(why.clone()),
+                false => CallError::Refused(why.clone()),
+            };
+            let _ = self.tx.send(Back::Answer(t, Box::new(Err(e))));
+        }
+    }
+
     /// Each call `calls` brings run as it comes, all at once, in its
     /// span ([`call_span`]), each noted in `open` until it is
-    /// answered: `None` once `calls` ends, else the first call that
-    /// trapped, with whether it was an Apply (still `open`).
+    /// answered, until `calls` ends, the instance is stopped, or a call
+    /// traps (still `open`).
     async fn run_calls(
         &self,
         a: &Accessor<State>,
         provider: &bindings::HostedProvider,
         who: &std::cell::RefCell<String>,
-        open: &std::cell::RefCell<BTreeMap<Ticket, tracing::Span>>,
+        open: &std::cell::RefCell<BTreeMap<Ticket, Open>>,
         calls: &mut tokio::sync::mpsc::UnboundedReceiver<Submitted>,
-    ) -> Option<(Ticket, bool, wasmtime::Error)> {
+    ) -> Ended {
         type Running<'a> = Pin<Box<dyn Future<Output = Ran> + 'a>>;
         let mut running: Vec<Running> = Vec::new();
         loop {
@@ -978,19 +1066,21 @@ impl Instance {
                 Poll::Pending
             });
             tokio::select! {
+                () = self.stop.wake.notified() => return Ended::Stopped,
                 got = calls.recv() => match got {
                     Some(c) => {
                         let span = call_span(&c);
-                        open.borrow_mut().insert(c.t, span.clone());
+                        let apply = matches!(c.call, Call::Apply(_));
+                        open.borrow_mut().insert(c.t, Open { span: span.clone(), apply });
                         running.push(Box::pin(self.one(a, provider, who, c).instrument(span)));
                     }
                     // dform dropped the provider.
-                    None => return None,
+                    None => return Ended::Dropped,
                 },
                 Ran { t, apply, answer } = next => {
                     let answer = match answer {
                         Ok(answer) => answer,
-                        Err(trap) => return Some((t, apply, trap)),
+                        Err(trap) => return Ended::Trapped((t, apply, trap)),
                     };
                     // The instance lets go of its span before its answer
                     // is told: the span ends as the run takes it.
@@ -1009,12 +1099,12 @@ impl Instance {
         &self,
         who: &str,
         trapped: Option<(Ticket, bool, wasmtime::Error)>,
-        mut open: BTreeMap<Ticket, tracing::Span>,
+        mut open: BTreeMap<Ticket, Open>,
         mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
     ) {
         if let Some((t, apply, trap)) = trapped {
-            if let Some(span) = open.remove(&t) {
-                Trapped::of(&trap).record(&span);
+            if let Some(o) = open.remove(&t) {
+                Trapped::of(&trap).record(&o.span);
             }
             let _ = self.tx.send(Back::Answer(
                 t,
@@ -1192,6 +1282,23 @@ impl Instance {
             ))),
         })
     }
+}
+
+/// A call in flight in the instance: the span it runs in, and whether it
+/// is an Apply.
+struct Open {
+    span: tracing::Span,
+    apply: bool,
+}
+
+/// Why the instance stopped taking calls.
+enum Ended {
+    /// dform dropped the provider.
+    Dropped,
+    /// The run's end stopped it ([`Wasm::stop`]).
+    Stopped,
+    /// A call trapped: its ticket, whether it was an Apply, the trap.
+    Trapped((Ticket, bool, wasmtime::Error)),
 }
 
 /// A call's run in the instance: its ticket, whether it was an Apply,
@@ -1385,13 +1492,21 @@ impl Provider for Wasm {
             .unwrap_or_else(|e| e.into_inner())
             .is_some()
     }
+
+    /// The run's end, while a call is stuck in the instance: it is
+    /// stopped ([`Wasm::stop`]'s first half), which answers the call and
+    /// frees the thread waiting on it.
+    fn stopper(&self) -> Option<dform_core::plugin::backend::Stop> {
+        let stop = self.stop.clone();
+        Some(Box::new(move || stop.stop()))
+    }
 }
 
 impl Drop for Wasm {
-    /// Its thread ends once it sees no more calls can come; a call still
-    /// running in it is left to finish there.
+    /// The instance stopped and its thread joined ([`Wasm::stop`]): a
+    /// call still running in it is cancelled, its span ended.
     fn drop(&mut self) {
-        self.calls.take();
+        self.stop();
     }
 }
 

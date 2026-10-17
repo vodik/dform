@@ -286,3 +286,50 @@ fn the_ovh_components_requests_are_under_its_calls() {
         "{edges:#?}"
     );
 }
+
+/// The run ends with a call still running in the component: the mock's
+/// Apply of `net.subnet a` answers 30s late (chaos `delay`), past its
+/// 300ms timeout, and the run fails at once. The run's end cancels the
+/// call and joins the instance's thread before the trace is written, so
+/// the trace has one root, every span's parent in it, and the call's span
+/// closed with its cancellation on it (`error.type`); the run does not
+/// wait the call out.
+#[test]
+fn a_call_running_as_the_run_ends_is_cancelled_and_its_span_closed() {
+    let s = Scratch::new("host-trace-cancel");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nfake = { source = \"fake\", timeout = \
+         \"300ms\", retries = 0 }\n",
+    );
+    s.write("p.df", PROG);
+    let began = std::time::Instant::now();
+    let (r, spans) = traced(&s, &["apply", "--chaos", "delay=net.subnet[\"a\"]:30000"]);
+    r.failure();
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(20),
+        "the run waited the call out: {:?}",
+        began.elapsed()
+    );
+    let tree = Tree::of(&spans);
+    let roots: Vec<String> = spans
+        .iter()
+        .filter(|s| tree.parent(s).is_none())
+        .map(Tree::label)
+        .collect();
+    assert_eq!(roots, ["dform dev"], "one root, every parent written");
+    let applied: Vec<&Json> = spans
+        .iter()
+        .filter(|s| {
+            Tree::label(s) == "provider.call Apply"
+                && common::attr(s, "addr").as_deref() == Some("net.subnet a")
+        })
+        .collect();
+    assert_eq!(applied.len(), 1, "{applied:#?}");
+    assert_eq!(
+        common::attr(applied[0], "error.type").as_deref(),
+        Some("cancelled"),
+        "{}",
+        applied[0]
+    );
+}
