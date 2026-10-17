@@ -359,7 +359,7 @@ mod tests {
     use super::*;
     use dform_core::http::fake::Server;
     use dform_core::plugin::credentials::Secret;
-    use dform_core::plugin::signer::{Got, Need, Outcome, Recipe, Request};
+    use dform_core::plugin::signer::{Command, Got, Need, Outcome, Recipe, Request};
 
     /// A kubeconfig held for the provider `p` whose exec plugin answers
     /// `t1`, `t2`, .. (one more each run, counted in `dir`), expiring at
@@ -487,6 +487,51 @@ mod tests {
         };
         assert_eq!(sent(None), ["Bearer t1", "Bearer t1"]);
         assert_eq!(sent(Some(0)), ["Bearer renewed", "Bearer renewed"]);
+    }
+
+    /// A signer whose token is what a command prints.
+    struct Printed;
+
+    impl Signer for Printed {
+        fn needs(&self) -> Result<Vec<Need>, String> {
+            Ok(vec![Need::Exec(Command {
+                argv: ["sh", "-c", "printf '%s' \"$T\""]
+                    .map(String::from)
+                    .to_vec(),
+                env: vec![("T".into(), "from-exec".into())],
+            })])
+        }
+
+        fn step(&self, got: &[Got]) -> Result<Outcome, String> {
+            let [Got::Exec(out)] = got else {
+                return Err(format!("got {got:?}"));
+            };
+            let token = String::from_utf8(out.clone()).map_err(|e| e.to_string())?;
+            Ok(Outcome::Material(Material {
+                recipe: vec![Recipe::Bearer(token)],
+                ..Material::default()
+            }))
+        }
+
+        fn sign(&self, _: Request, _: &Material, _: u64) -> Result<Request, String> {
+            Err("a bearer token signs nothing".into())
+        }
+
+        fn refresh(&self, m: &Material, _: u64) -> Result<Outcome, String> {
+            Ok(Outcome::Material(m.clone()))
+        }
+    }
+
+    /// The host runs the command a signer names, under the grant, and
+    /// hands it what the command printed.
+    #[test]
+    fn a_signers_command_is_run_by_the_host() {
+        let parts = [("token".to_string(), Secret::new(Vec::new()))];
+        let held = credentials::hold(Kind::Signed, "p", parts.into());
+        let host = Services::new(Grants::none("p")).with_signer(Arc::new(Printed));
+        let h = host.open(held.name()).unwrap().handle;
+        let c = host.credential(h).unwrap();
+        assert_eq!(c.headers[0].1.expose(), b"Bearer from-exec");
     }
 
     /// An exec plugin's token is used until it expires, then the plugin

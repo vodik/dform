@@ -25,6 +25,14 @@ const ALLOWED: &[(&str, &str)] = &[
         "crates/dform-core/src/plugin/credentials/kubeconfig.rs",
         "a kubeconfig's exec plugin",
     ),
+    // A provider's signer's command (a kubeconfig's exec plugin,
+    // `gke-gcloud-auth-plugin`): the operator's grant names it, and the
+    // host runs it as kubectl does, so the provider never holds what it
+    // answers.
+    (
+        "crates/dform-host/src/signed/exec.rs",
+        "a provider's signer's command",
+    ),
 ];
 
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -14,7 +14,9 @@
 //! a relative path the operator's file's directory's, else the working
 //! directory's). A fetch is that request, to exactly its URL,
 //! unauthenticated, through the host's HTTP (paced and traced as every
-//! request is). An exec is not performed yet.
+//! request is); an exec, the command, run under the grant ([`exec`]).
+
+mod exec;
 
 use crate::services::Services;
 use dform_core::plugin::credentials::{self, Credential, ENVIRONMENT, Secret};
@@ -183,13 +185,11 @@ impl Steps<'_> {
             Need::File(path) => {
                 Got::File(self.source.path(path).and_then(|p| std::fs::read(p).ok()))
             }
-            Need::Exec(c) => {
-                return Err(self.refused(format!(
-                    "its signer asks to run {:?}, which the host does not do yet (WORK.org: a \
-                     signer's exec need)",
-                    c.argv.first().map_or("", String::as_str)
-                )));
-            }
+            Need::Exec(c) => Got::Exec(
+                exec::Running::start(c)
+                    .and_then(|r| r.output(exec::TIMEOUT))
+                    .map_err(|e| self.refused(e))?,
+            ),
             Need::Fetch(req) => Got::Fetch(self.fetch(req)?),
         })
     }

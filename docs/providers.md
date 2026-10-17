@@ -547,8 +547,12 @@ signer-component`), linked with nothing (one that imports anything is
 refused, naming what), and a native provider serves its own as `Signer`
 beside the protocol (the SDK's `Handler::signer`). The provider that
 talks to the network never holds the material; the signer cannot reach
-the network. An `exec` need is refused until dform runs one under a
-grant.
+the network. An `exec` need is a command dform runs under the grant as
+kubectl runs a credential plugin: its argv, never a shell; dform's
+environment with the command's variables set over it; nothing on its
+standard input; each line of its standard error a line of dform's log
+(`DFORM_LOG=info`), its last the failure's when it fails; stopped after
+a minute.
 Either way it stays in dform's memory, is never serialized to a
 provider, and is zeroed when dropped. A provider opening a credential it
 was not granted is refused: `provider k8s is not granted the credential
