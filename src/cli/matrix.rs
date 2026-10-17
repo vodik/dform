@@ -506,17 +506,51 @@ impl Tree<'_> {
         self.plan_all(&members).1.outputs()
     }
 
+    /// The deployments of `order` planned for the tree's apply, each run as
+    /// `of` makes it (an apply, at its seat), as [`Tree::plan`] plans
+    /// them, while `during` runs here: the tree's ticks, over the
+    /// deployments planned, each on its own thread (`apply::tree`). What
+    /// `during` came to, and each one's error, in their order.
+    pub(super) fn applied<R>(
+        &self,
+        order: &[Dependency],
+        of: &dyn Fn(&Dependency) -> Cli,
+        during: impl FnOnce() -> R,
+    ) -> (Vec<Option<anyhow::Error>>, R) {
+        let members: Vec<Member> = order
+            .iter()
+            .map(|d| Member {
+                d,
+                run: of(d),
+                gone: false,
+            })
+            .collect();
+        let (planned, _, r) = self.plan_with(&members, during);
+        (planned.into_iter().map(|p| p.error).collect(), r)
+    }
+
     /// Each of `members` planned on a thread of its own, all at once, in
     /// the tree's run (its providers, `plugin::pool`): what each planned,
     /// in their order, and the board they read each other on.
     fn plan_all(&self, members: &[Member]) -> (Vec<Planned>, Arc<Board>) {
+        let (planned, board, ()) = self.plan_with(members, || ());
+        (planned, board)
+    }
+
+    /// [`Tree::plan_all`], `during` run here while the threads plan: what
+    /// it came to beside.
+    fn plan_with<R>(
+        &self,
+        members: &[Member],
+        during: impl FnOnce() -> R,
+    ) -> (Vec<Planned>, Arc<Board>, R) {
         let board = Board::new(
             members.iter().map(|m| m.d.name.clone()).collect(),
             members.iter().map(|m| m.d.full.clone()).collect(),
         );
         let pool = crate::plugin::pool::current();
         let within = tracing::Span::current();
-        let planned = std::thread::scope(|s| {
+        let (planned, r) = std::thread::scope(|s| {
             let threads: Vec<_> = (0..members.len())
                 .map(|i| {
                     let (board, pool, within) = (&board, pool.clone(), within.clone());
@@ -527,18 +561,21 @@ impl Tree<'_> {
                         .stack_size(STACK)
                         .spawn_scoped(s, move || {
                             let _unwinding = board.unwinding(i);
+                            let _leaving = members[i].run.seat.as_ref().map(|s| s.leaving());
                             let _pool = pool.map(crate::plugin::pool::join);
                             within.in_scope(|| self.plan_one(board, members, i))
                         })
                         .expect("a thread for a deployment's plan")
                 })
                 .collect();
-            threads
+            let r = during();
+            let planned = threads
                 .into_iter()
                 .map(|t| t.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
-                .collect()
+                .collect();
+            (planned, r)
         });
-        (planned, board)
+        (planned, board, r)
     }
 
     /// Member `i` of `members` planned, and posted on `board` for those

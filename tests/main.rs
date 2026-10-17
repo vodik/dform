@@ -15,6 +15,7 @@ mod aggregates;
 mod apply_block;
 mod apply_builtin_only;
 mod apply_confirm;
+mod apply_evaluates_as_plan;
 mod apply_events;
 mod apply_order;
 mod apply_project;

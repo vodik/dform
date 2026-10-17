@@ -345,9 +345,11 @@ own audit log and its own published outputs, and nothing about
 ordering. `apply X` in a project applies the tree `plan X` plans, as
 one apply: the `stacks:` line names it (`stacks: stacks.apps[env=lab]
 and what it reads, stacks.platform[env=lab]: one apply, its ticks the
-tree's`), every
-deployment's plan is printed under its `== NAME` line and the tree's
-changes confirmed once, every lease is taken before the first call.
+tree's`). Its deployments are planned as `plan X` plans them, each at
+once, waiting only on what it reads, with the same phases in the trace
+under its `deployment NAME` span; each one's plan is its tick 1, printed
+under its `== NAME` line, and the tree's changes are confirmed once.
+Every lease is taken before the first call.
 A tick is the tree's: every deployment's calls whose dependencies are
 met are submitted together, across deployments, paced by one window
 (`--parallel`, and each provider's window of requests), each in its
@@ -2512,10 +2514,9 @@ and what paces a provider is the window of its requests the host keeps by
 what the server answers (see the providers section). `--parallel 1` makes
 one call at a time, in plan order: the serial escape, and the setting for a
 first apply against a new provider, whose throttles and failures then come
-one at a time. A tree's apply walks every deployment's tick as one DAG
-under one window: N calls in flight across its deployments, and at
-`--parallel 1` one at a time, deployment by deployment in apply order,
-each's in plan order. The plan's output does not change with N; the calls
+one at a time. A tree's apply walks every deployment's tick at once under one window:
+N calls in flight across its deployments, and at `--parallel 1` one at
+a time, each deployment's in plan order. The plan's output does not change with N; the calls
 answer in the provider's order. The calls in flight run at once, and each is put on
 the executor's clock from the time its provider says it took; on the mock
 (chaos `latency`) the difference shows there:

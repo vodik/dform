@@ -87,7 +87,9 @@ fn apply_applies_what_the_stack_reads_first() {
     assert!(world.contains("10.0.0.0/16"), "{world}");
 }
 
-/// A dependency's apply that fails stops the run before its reader.
+/// A dependency's apply that fails stops the run before its reader: the
+/// reader is planned beside it, as a tree's plan plans it (its master
+/// made), and neither its state nor its world is written.
 #[test]
 fn a_failed_dependency_stops_the_apply() {
     let s = project("order-fail");
@@ -102,7 +104,10 @@ fn a_failed_dependency_stops_the_apply() {
         "{}",
         r.stdout
     );
-    assert!(!s.path("dform.state/stacks.app").exists());
+    for written in ["state.json", "remote.json", "state.audit.jsonl"] {
+        let path = format!("dform.state/stacks.app/env=prod/{written}");
+        assert!(!s.path(&path).exists(), "{path}");
+    }
 }
 
 #[test]

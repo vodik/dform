@@ -1,10 +1,10 @@
 //! A tick's Apply calls, of one deployment: prepared (its in-flight
-//! record written, what needs the master or waits taken out), made as one
+//! record written, what needs the master or waits taken out), made as its
 //! part of the executor's walk (`executor::run_tick`: a deployment's own
-//! apply walks one part, a tree's one per deployment, together), each told
-//! to the deployment's audit log, its fence and its write-ahead record as
-//! it goes, and what they did taken back: the tick's checkpoint, its
-//! retries and its world in the audit log.
+//! apply walks one part; a tree's, one per deployment, each on its own
+//! thread, together), each told to the deployment's audit log, its fence
+//! and its write-ahead record as it goes, and what they did taken back:
+//! the tick's checkpoint, its retries and its world in the audit log.
 
 use super::{Ran, TickPlan, Ticks, forgotten, log_retries, needing_master};
 use crate::cli::evaluated::Context;
@@ -265,16 +265,13 @@ impl<'a> Ticks<'a, '_> {
         let opts = executor::Options {
             parallel: self.args.parallel as usize,
             stop_after: self.stop_after.as_ref(),
+            beside: None,
         };
         let part = p.part(self.deployment(), self.backend(), &mut self.st, &calling);
-        let walked = executor::run_tick(vec![part], &opts);
+        let applied = executor::run_tick(part, &opts).applied();
         let log = calling.into_log();
         let failed = progress.map(Progress::finish).unwrap_or_default();
-        let applied = match walked {
-            executor::Walked::Ended(mut each) => each.remove(0),
-            executor::Walked::Stopped { error, .. } => Err(error),
-        };
-        let killed = self.stop_after.as_ref().is_some_and(|left| left.get() == 0);
+        let killed = executor::killed(self.stop_after.as_ref());
         self.called(calls, log, applied, &failed_of(&failed, 0), killed)
     }
 

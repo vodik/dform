@@ -207,6 +207,13 @@ impl Upstreams {
         self.board.post(self.me, Known::Evaluated(outputs));
     }
 
+    /// The outputs its plan makes known, for those that read it, before
+    /// its run ends: a tree's apply's deployment's run goes on to its
+    /// ticks.
+    pub(super) fn tell_planned(&self, outputs: Planned) {
+        self.board.planned(self.me, Some(outputs));
+    }
+
     /// What those it reads make known as their plans have it, once each
     /// has planned: what the run's report says of them. An error when one
     /// was not planned, or made known other than the run read (its

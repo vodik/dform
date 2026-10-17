@@ -884,6 +884,7 @@ impl Cli {
             planned: Default::default(),
             upstreams: None,
             sequence: None,
+            seat: None,
         };
         if let Cmd::Apply(Apply { chaos, .. }) = &mut cli.cmd {
             *chaos = mock.chaos;

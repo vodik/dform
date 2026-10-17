@@ -6,7 +6,7 @@ mod prompt;
 mod ticks;
 mod tree;
 
-pub(super) use self::tree::apply as tree;
+pub(super) use self::tree::{Seat, apply as tree};
 
 use self::ticks::Ticks;
 use super::evaluated::Evaluated;
@@ -126,7 +126,7 @@ impl Apply {
         compiled: deployment::Compiled,
         session: &mut Option<Session>,
     ) -> Result<Outcome> {
-        let Evaluated { cx, ev, hook } = run;
+        let Evaluated { mut cx, ev, hook } = run;
         let deployment::Evaluation {
             located,
             st,
@@ -142,6 +142,10 @@ impl Apply {
             violations,
             first,
         };
+        if let Some(seat) = cx.cli.seat.clone() {
+            self.planned(&mut cx, &located, &evaluator, &st, &start)?;
+            return tree::serve(self, &seat, &cx, &located, &evaluator, st, start, session);
+        }
         let r = Reporter::new(&cx, &evaluator, &located, &st);
         let mut ticks = Ticks::new(self, &cx, &r, &evaluator, &located, hook, session, st)?;
         let mut step = ticks.start(start)?;
@@ -151,6 +155,33 @@ impl Apply {
                 Next::Done(outcome) => return Ok(outcome),
             }
         }
+    }
+}
+
+impl Apply {
+    /// A deployment of a tree's apply, planned (`start`): what those it
+    /// reads know only after a tick, as their plans have it, is what its
+    /// report says (`board`); its outputs as its plan has them are told
+    /// to those that read it.
+    fn planned(
+        &self,
+        cx: &mut crate::cli::evaluated::Context,
+        located: &deployment::Located,
+        evaluator: &deployment::Evaluator,
+        st: &crate::state::State,
+        start: &Start,
+    ) -> Result<()> {
+        let Some(up) = cx.cli.upstreams.clone() else {
+            return Ok(());
+        };
+        cx.cli.planned = up.planned()?;
+        let p = &start.first.planned;
+        let r = Reporter::new(cx, evaluator, located, st);
+        let report = r.report(&p.plan, &p.res, &p.sections, 1, &[], &p.denies);
+        let outputs = r.outputs_of(&p.res, st, &report.outputs_after)?;
+        cx.cli.held.outputs(outputs.clone());
+        up.tell_planned(outputs);
+        Ok(())
     }
 }
 

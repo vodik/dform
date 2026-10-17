@@ -47,7 +47,7 @@ pub(super) struct Ticks<'a, 'h> {
     /// The in-flight record of an apply this one resumes (R-122).
     resumed: Option<state::InFlight>,
     /// Chaos `stop-after`: the executor's, counted across the run's ticks.
-    stop_after: Option<std::cell::Cell<usize>>,
+    stop_after: Option<std::sync::atomic::AtomicUsize>,
     /// How long a tick waits on an open null (R-122, R-201): the flag's,
     /// the stack's, by provider, the project's.
     waits: crate::project::Waits,
@@ -165,7 +165,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 approved: None,
             },
             resumed: None,
-            stop_after: cx.chaos.stop_after.map(std::cell::Cell::new),
+            stop_after: cx.chaos.stop_after.map(std::sync::atomic::AtomicUsize::new),
             waits,
             shown: cx.saved.is_some() || args.approval.is_some(),
             tree: false,

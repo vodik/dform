@@ -100,6 +100,9 @@ struct Cli {
     /// `apply PLAN` of a plan file of several deployments: which this run
     /// is, and what the earlier ones published.
     sequence: Option<order::InSequence>,
+    /// A run of a deployment in a tree's apply: its seat there, where it
+    /// does its ticks once planned (`apply::tree`).
+    seat: Option<apply::Seat>,
 }
 
 /// Where a plan's text goes: stdout, or held for the project's plan
