@@ -292,8 +292,10 @@ pub fn shown_call(name: &str) -> String {
     match name {
         crate::address::LEN => "`.len`".to_string(),
         OBJECT => "an object's key".to_string(),
-        MERGE | CONCAT => "a spread `..`".to_string(),
+        MERGE | CONCAT | WITHOUT => "a spread `..`".to_string(),
         REST => "a pattern's rest `..`".to_string(),
+        "__path" => "a field `x.f`".to_string(),
+        crate::types::AS => "a typed position".to_string(),
         n => format!("{n}()"),
     }
 }
@@ -1022,6 +1024,9 @@ pub const BODIES: &[(&str, Body)] = &[
     // An ambiguous quantity no position read has no value; the compiler
     // says so where the schema is known (`types::read`).
     (crate::types::AMBIGUOUS, |_| None),
+    // So has an ambiguous resource name no attribute's `ref(T)` picked
+    // (`types::read`, R-74).
+    (crate::types::AMBIGUOUS_REF, |_| None),
     (crate::range::LOWERED, |a| match a {
         [start, end, Value::Bool(inclusive)] => {
             crate::range::Range::new(start.clone(), end.clone(), *inclusive)
@@ -1119,8 +1124,8 @@ pub const BODIES: &[(&str, Body)] = &[
         ))),
         _ => None,
     }),
-    // `ref(T, A, "a.b")` after the rewrite: walk the rest of the path
-    // inside the top-level attribute's value.
+    // A key of a map input given by `--set` or `set from`, `labels.team`:
+    // the value nested at what the key has past the input's path.
     ("__under", |a| match a {
         [Value::Str(path), Value::Str(prefix), v] => {
             let rest = path.strip_prefix(prefix.as_str())?.strip_prefix('.')?;
@@ -1256,18 +1261,6 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     ("ip.unspecified", |a| match a {
         [ip] => Some(Value::Bool(as_ip_u32(ip)? == 0)),
-        _ => None,
-    }),
-    ("int.range", |a| match a {
-        [Value::Int(lo), Value::Int(hi), Value::Int(step)] if *step != 0 => {
-            let mut out = Vec::new();
-            let mut i = *lo;
-            while (*step > 0 && i < *hi) || (*step < 0 && i > *hi) {
-                out.push(Value::Int(i));
-                i = i.checked_add(*step)?;
-            }
-            Some(Value::List(out))
-        }
         _ => None,
     }),
     ("str.lower", |a| match a {

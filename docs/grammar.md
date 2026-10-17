@@ -2284,8 +2284,7 @@ type ("Types"). A range
 is for "once per i", things that have a position and no identity: a
 replica, a shard, the n-th /24; anything with a name is a relation, a
 row per thing. A range is a value, never a list: `[0..3]` is a
-list of one range, and `int.range(lo, hi, step)` is the function that
-gives a list.
+list of one range, and `[..0..3]` the list of its members.
 
 `x in E`, `E` an enum type alias (`type environment = enum("staging",
 "prod")`), binds `x` to each value in the order the type declares them,
@@ -2683,14 +2682,14 @@ implement.
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits`; `a in n` |
-| `int`     | `int.range(lo, hi, step)` (a list; `i in lo..hi` enumerates a range); `int.trunc(f)`, `int.round(f)`, `int.floor(f)`, `int.ceil(f)` (an int from a float, named by how it rounds) |
+| `int`     | `int.trunc(f)`, `int.round(f)`, `int.floor(f)`, `int.ceil(f)` (an int from a float, named by how it rounds) |
 | `quantity` | `quantity.to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`) |
 | `secret`  | `secret.declassify(v, why)` (the one way a secret leaves on purpose)      |
 | `ip`      | `ip.unspecified(a)`                                                       |
 | `str`     | `str.format(t, v, ...)`, `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.slice(s, start[, end])`; `"x" in s`, `s.len` |
 | `list`    | `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.first(l)`, `list.last(l)`; `v in l`, `l.len` |
 | `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`; operators `t + d`, `t - d`, `b - a`, `a < b` |
-| `random`  | `random.password(key[, length[, alphabet]])`, `random.base64(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
+| `random`  | `random.password(key[, length[, alphabet]])`, `random.base64(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)`, `random.verify_key(key)` (a signing key's public half), `random.generation(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time) |
 | `semver`  | `semver.satisfies(v, range)`; `a < b`; fields `v.major`, `v.minor`, `v.patch`, `v.pre` |
 | `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)`, `oci.resolve(r)` (a coeffect: the tag pinned to its digest at plan) (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |

@@ -421,6 +421,17 @@ impl BinOp {
             BinOp::Mod => "mod",
         }
     }
+
+    /// The operator as a program writes it: `+`, `-`, ..
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Mod => "%",
+        }
+    }
 }
 
 /// The operator a lowered function is.

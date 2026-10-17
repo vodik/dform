@@ -2663,16 +2663,16 @@ Secrets are also checked statically: one dataflow pass over
 the predicate signatures labels every position a secret reaches, from a
 `sensitive` schema attribute, an input declared `secret(T)` (`input pw:
 secret(string)`) or an extern column declared `-value: secret(T)`, through
-rules, `format`, arithmetic, lists and objects. A rule that would leak one
+rules, interpolation (`str.format`), arithmetic, lists and objects. A rule that would leak one
 is a compile error with a span, before anything is evaluated:
 
 | code  | the secret reaches |
 |-------|--------------------|
-| E0301 | a test or an inspecting function: `==` (a binding's too, `pw(p), p == "x"`), `!=`, `<` and the orders, `in` either side, `has`, a join (`pw(p), known(p)`), a builtin predicate, `len`, `split`, `inet_*`; a field's (`conn.password == ..`) and an interpolation's (`"${pw}!" == ..`) |
+| E0301 | a test or an inspecting function: `==` (a binding's too, `pw(p), p == "x"`), `!=`, `<` and the orders, `in` either side, `has`, a join (`pw(p), known(p)`), a builtin predicate, `.len`, `str.split`, `inet.*`; a field's (`conn.password == ..`) and an interpolation's (`"${pw}!" == ..`) |
 | E0302 | a negated literal, `not has` included: absence leaks a bit |
 | E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
 | E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a provider's setting it does not declare sensitive (when it declares its settings), an output or input not declared `secret(T)`, a `deny`/`warn`, a let's parameter typed `T` (at the call) |
-| E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
+| E0305 | a resource address (`want`, a resource name, a reference, a copy's resource `c.x`) |
 | E0306 | what a coeffect is asked with, sent off the machine at plan: a location (`io.read("https://x/${pw}")`), an extern's `+` column not declared `+x: secret(T)` |
 
 A field an object type declares `secret(T)` is declared the same way,
@@ -4598,8 +4598,8 @@ host_ip(ip) where ip in vm.ips
 
 `i in lo..hi` enumerates the integers from `lo` up to `hi`, and `i in
 lo..=hi` up to and including it, for "once per i": a replica, a shard,
-the n-th /24. Both ends are bound integers; a range anywhere but after
-`in` is an error, and `int.range(lo, hi, step)` is the list.
+the n-th /24. Both ends are bound integers; a range is a value (R-180),
+and `[..lo..hi]` the list of its members.
 
 ```dform
 resource compute.vm "${p}-${i}" { size = "small" } where pool(p, n), i in 0..n
@@ -5521,7 +5521,7 @@ a span of its own.
 
 ## Status
 
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read`, and `oci.resolve`, a tag pinned to its digest (the coeffects); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `random.verify_key`, `random.generation`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read`, and `oci.resolve`, a tag pinned to its digest (the coeffects); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - negation: `not` requires the atom be ground at evaluation time
 

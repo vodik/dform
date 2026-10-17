@@ -5,16 +5,12 @@
 //!
 //! | call                                     | node                              |
 //! |------------------------------------------|-----------------------------------|
-//! | `__quantity("500m", file, start, end)`   | `Quantity`, at its span           |
-//! | `add(a, b)` .. `mod(a, b)`, `sub(0, a)`  | `Binary`, `Neg`                   |
 //! | `str.format("a%sb", x)`                  | `Interp`                          |
-//! | `__object(..)`, `__merge(..)`            | `Object` (`spread.rs`)            |
-//! | `__concat(..)`                           | `List` (`spread.rs`)              |
-//! | `__range(lo, hi, incl)`                  | `Range`                           |
-//! | `__as(v, "T")`                           | `As`                              |
-//! | `__path(v, "a.b")`, `__len(v)`           | `Field` of `Field` and `Len` steps |
 //! | `__ref("T", a, "p")`                     | `RefOf` a `Resource` (or its `Field`) |
 //! | any other `f(..)`                        | `Call` of the function, or of a name read as data |
+//!
+//! The resolver builds every other form's node itself (an operator, a
+//! spread, a range, a typing, a field, a quantity).
 
 use super::Builder;
 use crate::program::node::*;

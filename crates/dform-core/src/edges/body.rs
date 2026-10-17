@@ -199,12 +199,6 @@ impl Graph<'_> {
             return;
         }
         let elements: Vec<Term> = match written {
-            Term::Func { name, .. } if name == "int.range" => {
-                let int = Shape::Ty(Ty::Scalar("int".into()));
-                let role = Role::Types { prints: false };
-                self.edge(x, int, "a range".into(), span, role);
-                return;
-            }
             Term::List(xs) => xs,
             Term::Val(Value::List(xs)) => xs.into_iter().map(Term::Val).collect(),
             _ => return,

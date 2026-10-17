@@ -317,13 +317,7 @@ impl<'a> Written<'a> {
                     (t, n, _) => format!("{} {}", self.term(t), self.term(n)),
                 }
             }
-            Term::Func { name, args } => format!(
-                "{name}({})",
-                args.iter()
-                    .map(|a| self.term(a))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            Term::Func { name, args } => self.form(name, args),
             Term::List(xs) => format!(
                 "[{}]",
                 xs.iter()
@@ -332,6 +326,63 @@ impl<'a> Written<'a> {
                     .join(", ")
             ),
             t => term(t),
+        }
+    }
+
+    /// A call as the program writes what lowers to it: an operator (`a +
+    /// b`, `-a`), a field (`x.f`), a spread (`{ ..a, k = v }`, `[..a,
+    /// x]`), a typed position's value; any other function's call.
+    fn form(&self, name: &str, args: &[Term]) -> String {
+        use crate::functions::{CONCAT, MERGE};
+        use crate::program::node::BinOp;
+        match (BinOp::try_from(name), args) {
+            (Ok(BinOp::Sub), [Term::Val(Value::Int(0)), a]) => {
+                return format!("-{}", self.operand(a));
+            }
+            (Ok(op), [a, b]) => {
+                return format!("{} {} {}", self.operand(a), op.symbol(), self.operand(b));
+            }
+            _ => {}
+        }
+        let list = |ts: Vec<String>| ts.join(", ");
+        match (name, args) {
+            ("__path", [v, Term::Val(Value::Str(p))]) => format!("{}.{p}", self.operand(v)),
+            (crate::types::AS, [v, _]) => self.term(v),
+            (MERGE, parts) => {
+                let parts = parts.iter().flat_map(|p| match p {
+                    Term::Obj(m) => m
+                        .iter()
+                        .map(|(k, v)| format!("{k} = {}", self.term(v)))
+                        .collect(),
+                    p => vec![format!("..{}", self.term(p))],
+                });
+                format!("{{ {} }}", list(parts.collect()))
+            }
+            (CONCAT, parts) => {
+                let parts = parts.iter().flat_map(|p| match p {
+                    Term::List(xs) => xs.iter().map(|x| self.term(x)).collect(),
+                    p => vec![format!("..{}", self.term(p))],
+                });
+                format!("[{}]", list(parts.collect()))
+            }
+            _ => format!(
+                "{name}({})",
+                list(args.iter().map(|a| self.term(a)).collect())
+            ),
+        }
+    }
+
+    /// An operator's operand: one that is an operator itself in
+    /// parentheses.
+    fn operand(&self, t: &Term) -> String {
+        match t {
+            Term::Func { name, args }
+                if args.len() == 2
+                    && crate::program::node::BinOp::try_from(name.as_str()).is_ok() =>
+            {
+                format!("({})", self.term(t))
+            }
+            t => self.term(t),
         }
     }
 

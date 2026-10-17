@@ -419,13 +419,10 @@ pub(super) fn unknown_in(atom: &Atom, negated: bool, unknown: &Term, rec: &Rec) 
     diag::Diagnostics(vec![d]).into()
 }
 
-/// A term as the program writes it, its variables by the source's names.
+/// A term as the program writes it, its variables by the source's names
+/// (`spell::Written`).
 fn shown(t: &Term) -> String {
-    match t {
-        Term::Var(x) => crate::syntax::resolve::source_name(x),
-        Term::List(xs) => format!("[{}]", xs.iter().map(shown).collect::<Vec<_>>().join(", ")),
-        t => spell::term(t),
-    }
+    spell::Written::new(&crate::query::Redactor::default()).term(t)
 }
 
 /// A call that answered nothing (R-134): `Ok` when the function is

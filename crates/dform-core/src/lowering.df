@@ -66,6 +66,10 @@ internal fn __label(type: string, name: string, path: string) -> string
 #| example: __as(cfg.net, "inet")
 internal fn __as(value: any, ty: string) -> any forwards, forwards nulls
 
+#| A bare name two or more types share, as a resource in an attribute (R-74): its name and place, then a reference per candidate; the attribute's `ref(T)` picks the candidate of type `T`, and anywhere else it is the error that lists them. It has no value.
+#| example: __resource("main", file, start, end, __ref("net.vpc", "main", ""), __ref("db.postgres", "main", ""))
+internal fn __resource(name: string, file: int, start: int, end: int, candidate: any, ...) -> any?
+
 #| A quantity literal with no reading of its own (`500m`) until its position's type reads it (R-66); it has no value.
 #| example: __quantity("500m", file, start, end)
 internal fn __quantity(text: string, file: int, start: int, end: int) -> any?
@@ -86,7 +90,7 @@ internal fn __body(value: any) -> any? forwards, forwards nulls
 #| example: __path(X, "f")
 internal fn __path(value: any, path: string) -> any? forwards, forwards nulls
 
-#| Whether a value is known: true of every value; over a null, undetermined, as any content position (Rule 2). `has r` of a resource lowers to it over the resource's identity (R-152).
+#| Whether a value is known: true of every value; over a null, undetermined, as any content position (Rule 2). Written by `partition` where a `has` reads a value the plan may not know yet: a resource's identity (`has r`, R-152), a computed attribute (`has r.p`).
 #| example: __known(V)
 internal fn __known(value: any) -> bool
 

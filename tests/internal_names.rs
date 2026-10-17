@@ -1,7 +1,8 @@
 //! The compiler's relations are its own (`ast::Name::Internal`): a
 //! program that writes a name of the same text writes a relation of its
 //! own, and never reaches the compiler's helpers, its facts or its
-//! functions; a program's `__`-led variable is a variable like any other.
+//! functions; a program's `__`-led variable is a variable like any other;
+//! and a message spells what the compiler wrote as the program wrote it.
 
 use crate::common;
 use common::{Run, Scratch};
@@ -61,4 +62,14 @@ fn a_programs_double_underscore_variable_is_bound() {
     let src = "t(1)\nt(2)\nw(__z) where t(__z), __z > 1\n";
     let r = dev("internal-var", src, &["why", "w(2)"]).success();
     assert!(r.stdout.contains("with __z = 2"), "{}", r.stdout);
+}
+
+/// A message spells what the lowering's functions came from as the
+/// program wrote it: `x + 1`, never `add(x, 1)`.
+#[test]
+fn a_why_not_line_spells_the_programs_operator() {
+    let src = "p(1)\nq(y) where p(x), y = x + 1\nr(x) where q(x)\n";
+    let r = dev("internal-why-op", src, &["why", "r(5)"]).success();
+    assert!(r.stdout.contains("y == x + 1: false"), "{}", r.stdout);
+    assert!(!r.stdout.contains("add("), "{}", r.stdout);
 }
