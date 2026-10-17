@@ -100,10 +100,9 @@ fn no_clock_is_no_credential() {
         Services::new(Grants::none("ovh")).with_signer(Arc::new(dform_provider_ovh_signer::Ovh));
     let e = host.open(held.name()).unwrap_err();
     assert!(
-        e.message.starts_with(&format!(
-            "provider ovh: the credential {}: the API's time: HTTP 403",
-            held.name()
-        )),
+        e.message.starts_with(
+            "provider ovh: the credential the program gave it: the API's time: HTTP 403"
+        ),
         "{e:?}"
     );
     assert!(server.calls().is_empty(), "{:?}", server.calls());
@@ -121,9 +120,91 @@ fn a_signed_credential_needs_its_providers_signer() {
     assert_eq!(
         e.message,
         format!(
-            "provider plain: the credential {} is signed, and the provider has no signer",
+            "provider plain: the credential {} is its signer's to make, and the provider has no \
+             signer",
             held.name()
         )
+    );
+}
+
+/// A kubeconfig held for the provider `p` whose exec plugin answers
+/// `t1`, `t2`, .. (one more each run, counted in `dir`), expiring at
+/// `expires`, for the server `url`.
+fn exec_kubeconfig(dir: &std::path::Path, url: &str, expires: &str) -> credentials::Holding {
+    let script = "n=$(( $(cat \"$DIR/runs\" 2>/dev/null || echo 0) + 1 )); echo $n > \"$DIR/runs\"; \
+                  printf '{\"status\": {\"token\": \"t%s\", \"expirationTimestamp\": \"%s\"}}' $n \"$EXP\"";
+    let kc = serde_json::json!({
+        "current-context": "c",
+        "contexts": [{"name": "c", "context": {"cluster": "k", "user": "u"}}],
+        "clusters": [{"name": "k", "cluster": {"server": url}}],
+        "users": [{"name": "u", "user": {"exec": {
+            "apiVersion": "client.authentication.k8s.io/v1",
+            "command": "sh", "args": ["-c", script],
+            "env": [{"name": "DIR", "value": dir.display().to_string()},
+                    {"name": "EXP", "value": expires}]}}}]
+    });
+    let parts = [(
+        "kubeconfig".to_string(),
+        Secret::new(kc.to_string().into_bytes()),
+    )];
+    credentials::hold(Kind::Kubeconfig, "p", parts.into())
+}
+
+/// A kubeconfig is the k8s provider's signer's to make, its exec plugin
+/// run by the host: its token is used until it expires, then the signer
+/// makes it again for the next request, the plugin run again; one that
+/// does not expire runs once. Its server is what the provider reads off
+/// the credential.
+#[test]
+fn a_kubeconfigs_exec_plugin_runs_again_when_its_token_expires() {
+    use dform::http::fake::Server;
+    let server = Server::http1();
+    server.answer(|s| {
+        (
+            200,
+            Vec::new(),
+            s.header("authorization").unwrap_or("").into(),
+        )
+    });
+    let scratch = crate::common::Scratch::new("kubeconfig-exec");
+    let dir = scratch.path("runs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let two_requests = |held: &credentials::Holding| {
+        let host =
+            Services::new(Grants::none("p")).with_signer(Arc::new(dform_provider_k8s_signer::Kube));
+        let opened = host.open(held.name()).unwrap();
+        assert_eq!(opened.endpoint, Some(server.url("")));
+        (0..2)
+            .map(|_| {
+                let req = HttpRequest {
+                    method: "GET".into(),
+                    url: server.url("/"),
+                    ..HttpRequest::default()
+                };
+                let r = host.send(req, Some(opened.handle), None).unwrap();
+                String::from_utf8(r.body).unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let held = exec_kubeconfig(&dir, &server.url(""), "2000-01-01T00:00:00Z");
+    assert_eq!(two_requests(&held), ["Bearer t2", "Bearer t3"]);
+    std::fs::remove_file(dir.join("runs")).unwrap();
+    let held = exec_kubeconfig(&dir, &server.url(""), "2999-01-01T00:00:00Z");
+    assert_eq!(two_requests(&held), ["Bearer t1", "Bearer t1"]);
+}
+
+/// A program's kubeconfig that does not parse is said without the name
+/// dform made for its credential, and never quoted.
+#[test]
+fn a_programs_kubeconfig_that_does_not_parse_says_so() {
+    let host =
+        Services::new(Grants::none("k8s")).with_signer(Arc::new(dform_provider_k8s_signer::Kube));
+    let bad = [("kubeconfig".to_string(), Secret::new(b"s3cret: [".to_vec()))];
+    let held = credentials::hold(Kind::Kubeconfig, "k8s", bad.into());
+    let e = host.open(held.name()).unwrap_err();
+    assert_eq!(
+        e.message,
+        "provider k8s: the credential the program gave it: it is not a kubeconfig (YAML)"
     );
 }
 

@@ -170,11 +170,14 @@ impl Steps<'_> {
     }
 
     fn refused(&self, why: String) -> Error {
-        Error::fatal(format!(
-            "provider {}: the credential {}: {why}",
-            self.host.grants().provider,
-            self.name
-        ))
+        let provider = &self.host.grants().provider;
+        Error::fatal(match self.source {
+            // Its name is one the engine made, which the user never wrote.
+            Source::Settings(_) => {
+                format!("provider {provider}: the credential the program gave it: {why}")
+            }
+            _ => format!("provider {provider}: the credential {}: {why}", self.name),
+        })
     }
 
     /// What `need` gets from the grant.

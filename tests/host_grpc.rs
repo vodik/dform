@@ -150,7 +150,9 @@ fn a_held_kubeconfig_presents_its_client_certificate() {
     // The same cluster, its CA trusted, and no client certificate.
     let anonymous = held(&kubeconfig.replace("user: {client-certificate-data", "x: {a"));
     let held = held(&kubeconfig);
-    let (_h, c) = client(Services::new(grants(&[])));
+    let k8s = Services::new(grants(&[]))
+        .with_signer(std::sync::Arc::new(dform_provider_k8s_signer::Kube));
+    let (_h, c) = client(k8s);
     let opened = c.open(held.name()).unwrap();
     assert_eq!(opened.endpoint.as_deref(), Some(server.url("").as_str()));
     assert_eq!(opened.namespace.as_deref(), Some("shop"));

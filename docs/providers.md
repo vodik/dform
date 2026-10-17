@@ -420,13 +420,14 @@ on both; tests/host_wasm.rs keeps them from drifting.
 | `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
 | `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native: every request through the host's HTTP client | docs/providers/tailscale.md |
 | `ovh` (`crates/dform-provider-ovh`) | the SDK's `Handler` directly, and a signer (`crates/dform-provider-ovh/signer`) | native, or a component (granted `wasi:filesystem` until the crate split) and its signer's component: every request through the host's HTTP client, signed by its signer (`signed`) or with the program's token | docs/providers/ovh.md |
-| `k8s` (`crates/dform-k8s`, built by `crates/dform-provider-k8s`) | the SDK's `Handler` directly, a thin client of the Kubernetes API | native, or a wasm provider (granted `wasi:filesystem`, below): every request through the host's HTTP client, its kubeconfig a credential the host holds | docs/reference.md, "The Kubernetes provider" |
+| `k8s` (`crates/dform-k8s`, built by `crates/dform-provider-k8s`) | the SDK's `Handler` directly, a thin client of the Kubernetes API, and a signer (`crates/dform-provider-k8s/signer`) | native, or a wasm provider (granted `wasi:filesystem`, below) and its signer's component: every request through the host's HTTP client, its kubeconfig a credential the host holds, which the signer makes | docs/reference.md, "The Kubernetes provider" |
 
 The Kubernetes provider is the same source either way: the executable
-`dform-provider-k8s`, or `dform_provider_k8s.wasm` (`cargo xtask
-components` builds it with the fake and the OVH provider; `cargo xtask
-install` installs it where dform looks, so its table needs no `path`,
-docs/reference.md "Installing"). As a wasm
+`dform-provider-k8s`, or `dform_provider_k8s.wasm` beside its signer,
+`dform_provider_k8s_signer.wasm` (`cargo xtask components` builds them
+with the fake and the OVH provider; `cargo xtask install` installs them
+where dform looks, so its table needs no `path`, docs/reference.md
+"Installing"). As a wasm
 provider it is granted the filesystem, which the language front-end
 that parses its schema links until the crate split, and in which it
 keeps what it derives from a cluster in the run's cache directory (the
@@ -496,7 +497,7 @@ A credential is a name; its kind says how the host applies it:
 | `basic` | `USER:PASSWORD` | `Authorization: Basic ..` |
 | `header` | `NAME: VALUE` | that header |
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
-| `kubeconfig` | a kubeconfig, or its parts (`host`, `ca`, `token`, `client_certificate`, `client_key`) | its current context's token, client certificate or exec plugin's answer (run by dform, again once it expires), and its cluster's CA, `tls-server-name` and `proxy-url`; its server is the credential's `endpoint`, its namespace the credential's `namespace` |
+| `kubeconfig` | a kubeconfig, or its parts (`host`, `ca`, `token`, `client_certificate`, `client_key`), as the k8s provider's signer reads it (as `signed`) | its current context's token, client certificate or exec plugin's answer (run by dform for the signer, again once it expires), and its cluster's CA, `tls-server-name` and `proxy-url`; its server is the credential's `endpoint`, its namespace the credential's `namespace` |
 | `signed` | what the provider's signer makes of the grant: the environment's variables it names, else the file it names (`signed:environment`), or the operator's file (`signed:NAME`) | as each of the material's recipes says: a bearer token, headers, a client certificate, a CA, a server name, a proxy, or each request signed by the signer as the host sends it |
 | `ssh` | an unencrypted OpenSSH private key, in the operator's file only (or an agent's key by its comment or fingerprint) | by dform's SSH client for an `ssh://` or `git+ssh://` location, never to an HTTP call: `[io] credentials = { "ssh://HOST/*" = "ssh:NAME" }` (docs/reference.md, "Locations and transports") |
 
@@ -513,7 +514,8 @@ the operator's, as dform.toml grants it: the file
 `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (`DFORM_CREDENTIALS` names
 another directory), or `KIND:environment`, the environment's of a kind
 that has one (`kubeconfig:environment`: `KUBECONFIG`'s files, else
-`~/.kube/config`, else a pod's service account, read by dform;
+`~/.kube/config`, else a pod's service account, as the k8s provider's
+signer names them;
 `signed:environment`: the variables the provider's signer names, else
 the files it names, OVH's `OVH_APPLICATION_KEY` .. else the first
 `ovh.conf` where python-ovh looks).

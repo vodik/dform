@@ -39,7 +39,7 @@ struct Provider(&'static str, Build, bool);
 /// Every built-in provider (a `crates/dform-provider-NAME` but the fake,
 /// which tests run).
 const PROVIDERS: [Provider; 5] = [
-    Provider("k8s", Build::Wasm, false),
+    Provider("k8s", Build::Wasm, true),
     Provider("ovh", Build::Wasm, true),
     Provider("postgres", Build::Native, false),
     Provider("tailscale", Build::Native, false),
@@ -296,12 +296,15 @@ mod tests {
             std::fs::set_permissions(&built, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let placed = place(&target, &dir).unwrap();
-        // The OVH provider's signer beside it, where the wasm host looks.
-        assert!(
-            placed.contains(&dir.join("dform-provider-ovh_signer.wasm")),
-            "{placed:?}"
-        );
-        assert_eq!(placed.len(), PROVIDERS.len() + 1);
+        // The OVH and k8s providers' signers beside them, where the wasm
+        // host looks.
+        for signer in [
+            "dform-provider-ovh_signer.wasm",
+            "dform-provider-k8s_signer.wasm",
+        ] {
+            assert!(placed.contains(&dir.join(signer)), "{placed:?}");
+        }
+        assert_eq!(placed.len(), PROVIDERS.len() + 2);
         let found = Lookup::default()
             .with(Place::UserData, dir.clone())
             .installed();
@@ -322,7 +325,7 @@ mod tests {
             .lines()
             .filter_map(|l| l.trim().strip_prefix("\"crates/dform-provider-"))
             .filter_map(|l| l.strip_suffix("\","))
-            // A provider's signer is its own (`ovh/signer`).
+            // A provider's signer is its own (`ovh/signer`, `k8s/signer`).
             .filter(|name| *name != "fake" && !name.contains('/'))
             .collect();
         crates.sort();

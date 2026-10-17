@@ -73,9 +73,9 @@ struct Kube {
 
 impl Kube {
     fn new(kubeconfig: &str) -> Kube {
-        let _ = dform_sdk::set_host(Box::new(dform_host::services::Services::new(Grants::none(
-            PROVIDER,
-        ))));
+        let host = dform_host::services::Services::new(Grants::none(PROVIDER))
+            .with_signer(std::sync::Arc::new(dform_provider_k8s_signer::Kube));
+        let _ = dform_sdk::set_host(Box::new(host));
         let text = std::fs::read(kubeconfig).unwrap();
         let held = credentials::hold(
             Kind::Kubeconfig,

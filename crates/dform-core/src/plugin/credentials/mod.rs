@@ -11,8 +11,8 @@
 //! | `basic`      | `USER:PASSWORD`                   | `Authorization: Basic ..`               |
 //! | `header`     | `NAME: VALUE`                     | that header                             |
 //! | `tls`        | PEM: a certificate chain and key  | the TLS session's client certificate    |
-//! | `kubeconfig` | a kubeconfig (its current context), or its parts ([`kubeconfig`]) | its user's token, client certificate or exec plugin's answer (until it expires), its cluster's CA, server name and proxy; its server is the credential's endpoint, its namespace the credential's |
-//! | `signed` | what the provider's signer makes of the operator's grant (`crate::plugin::signer`): the environment's variables or a file it names, the operator's file | as its material's recipe says: a bearer token, headers, a client certificate, a proxy, or each request signed by the signer as the host sends it |
+//! | `kubeconfig` | a kubeconfig, or its parts, as the provider's signer (the k8s provider's) makes it of the operator's grant | as `signed`: its user's token, client certificate or exec plugin's answer (until it expires), its cluster's CA, server name and proxy; its server is the credential's endpoint, its namespace the credential's |
+//! | `signed` | what the provider's signer makes of the operator's grant (`crate::plugin::signer`): the environment's variables or a file it names, the operator's file | as each of its material's recipes says: a bearer token, headers, a client certificate, a CA, a server name, a proxy, or each request signed by the signer as the host sends it |
 //! | `ssh`        | an unencrypted OpenSSH private key | by the `ssh` provider (`use ssh { key = "NAME" }`), never to an HTTP call; only the operator's file ([`file`]) |
 //!
 //! Where a value comes from:
@@ -28,21 +28,18 @@
 //!   credentials = ["kubeconfig:prod"]`): the file
 //!   `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (or under
 //!   `DFORM_CREDENTIALS`), or, named `KIND:environment` ([`ENVIRONMENT`]),
-//!   the environment's of a kind that has one (a kubeconfig's:
-//!   `KUBECONFIG`, `~/.kube/config`, a pod's service account; a signed
-//!   one's: the variables its provider's signer names, else the file it
-//!   names). A provider is told, in its
+//!   the environment's of a kind its provider's signer makes (the
+//!   variables and the files it names: a kubeconfig's `KUBECONFIG`,
+//!   `~/.kube/config`, a pod's service account). A provider is told, in its
 //!   Configure's `credentials`, the one dform.toml grants it of each kind,
 //!   and a provider the program does not configure the environment's of
 //!   each kind it declares a setting of; the host opens it only with the
 //!   grant: nothing in the environment reaches a provider unless the
 //!   program or dform.toml gives it.
 
-pub mod kubeconfig;
-
 use anyhow::{Result, anyhow, bail};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -118,10 +115,11 @@ impl Kind {
         })
     }
 
-    /// Whether the environment has one of the kind (a kubeconfig's:
-    /// `KUBECONFIG`; a signed one's: what its signer names), which
-    /// `KIND:environment` names ([`ENVIRONMENT`]).
-    pub fn in_environment(self) -> bool {
+    /// Whether its provider's signer makes one (`crate::plugin::signer`,
+    /// which dform's host runs): `kubeconfig` (the k8s provider's) and
+    /// `signed`. The environment has one of such a kind, what its signer
+    /// names, which `KIND:environment` names ([`ENVIRONMENT`]).
+    pub fn made_by_signer(self) -> bool {
         matches!(self, Kind::Kubeconfig | Kind::Signed)
     }
 
@@ -139,7 +137,7 @@ impl Kind {
 }
 
 /// The NAME of the environment's credential of a kind that has one
-/// ([`Kind::in_environment`]): `kubeconfig:environment` is the
+/// ([`Kind::made_by_signer`]): `kubeconfig:environment` is the
 /// environment's kubeconfig, never an operator's file.
 pub const ENVIRONMENT: &str = "environment";
 
@@ -229,7 +227,7 @@ impl Credential {
 
     /// `value` applied as its kind says: one value, the operator's file or
     /// a setting.
-    fn apply(&mut self, kind: Kind, value: &Secret, dir: Option<&Path>) -> Result<()> {
+    fn apply(&mut self, kind: Kind, value: &Secret) -> Result<()> {
         let name = self.name.clone();
         match kind {
             Kind::Bearer => self.bearer(value.text(&name)?),
@@ -257,13 +255,9 @@ impl Credential {
                 }
                 self.client_cert = Some((value.clone(), value.clone()));
             }
-            Kind::Kubeconfig => {
-                let what = format!("the credential {name}");
-                kubeconfig::Kubeconfig::parse(&what, value.text(&name)?, dir)?.apply(self)?
-            }
-            Kind::Signed => bail!(
-                "the credential {name} is signed: its provider's signer makes it, which the \
-                 host runs"
+            Kind::Kubeconfig | Kind::Signed => bail!(
+                "the credential {name} is its provider's signer's to make, which the host runs \
+                 for the provider"
             ),
             Kind::Ssh => bail!(
                 "the credential {name} is an SSH key: the ssh provider uses it (`use ssh {{ key \
@@ -275,15 +269,10 @@ impl Credential {
 }
 
 /// The credential `name` of `kind` a provider's settings give, by
-/// setting, as the host applies it: one is the value; several are a
-/// kind's parts (a kubeconfig's `host`, `ca`, `token`, ..,
-/// [`kubeconfig::Kubeconfig::of_parts`]).
+/// setting, as the host applies it: one setting, the value (several are
+/// a kind its provider's signer makes of them, [`held_settings`]).
 fn of_settings(kind: Kind, name: &str, parts: &BTreeMap<String, Secret>) -> Result<Credential> {
     let mut c = Credential::named(name);
-    if kind == Kind::Kubeconfig {
-        kubeconfig::Kubeconfig::of_parts(name, parts)?.apply(&mut c)?;
-        return Ok(c);
-    }
     let mut values = parts.values();
     let (Some(v), None) = (values.next(), values.next()) else {
         bail!(
@@ -292,7 +281,7 @@ fn of_settings(kind: Kind, name: &str, parts: &BTreeMap<String, Secret>) -> Resu
             parts.keys().cloned().collect::<Vec<_>>().join(", ")
         );
     };
-    c.apply(kind, v, None)?;
+    c.apply(kind, v)?;
     Ok(c)
 }
 
@@ -356,7 +345,6 @@ pub fn hold(kind: Kind, to: &str, parts: BTreeMap<String, Secret>) -> Holding {
 /// provider `to` ([`hold`]); `None` when it is not one held for it. Its
 /// error says why it does not load, never a value.
 pub fn held(name: &str, to: &str) -> Option<Result<Credential>> {
-    // Loaded with the map let go: a kubeconfig's exec plugin runs.
     let (kind, parts) = {
         let map = held_map();
         let h = map.get(name).filter(|h| h.to == to)?;
@@ -398,11 +386,16 @@ pub fn file(name: &str) -> Result<PathBuf> {
 }
 
 /// Load the operator's credential `name` as the host applies it: its
-/// file, or, `KIND:environment`, the environment's ([`ENVIRONMENT`]).
+/// file. A kind its provider's signer makes, and so one of the
+/// environment's ([`ENVIRONMENT`]), is the host's to make for that
+/// provider, never loaded here.
 pub fn load(name: &str) -> Result<Credential> {
     let (kind, rest) = parse_name(name)?;
-    if rest == ENVIRONMENT {
-        return environment(kind, name);
+    if rest == ENVIRONMENT && !kind.made_by_signer() {
+        bail!(
+            "the credential {name}: a {} credential has no source in the environment",
+            kind.as_str()
+        );
     }
     let path = file(name)?;
     let v = std::fs::read(&path).map(Secret::new).map_err(|e| {
@@ -412,21 +405,7 @@ pub fn load(name: &str) -> Result<Credential> {
         )
     })?;
     let mut c = Credential::named(name);
-    c.apply(kind, &v, path.parent())?;
-    Ok(c)
-}
-
-/// The environment's credential of `kind`, named `name`
-/// (`KIND:environment`), read now.
-fn environment(kind: Kind, name: &str) -> Result<Credential> {
-    let mut c = Credential::named(name);
-    match kind {
-        Kind::Kubeconfig => kubeconfig::Kubeconfig::environment()?.apply(&mut c)?,
-        _ => bail!(
-            "the credential {name}: a {} credential has no source in the environment",
-            kind.as_str()
-        ),
-    }
+    c.apply(kind, &v)?;
     Ok(c)
 }
 
@@ -449,26 +428,23 @@ mod tests {
         );
     }
 
-    /// A program's value is held for one provider, applied by its kind,
-    /// and never printed; it is gone once the holding is.
+    /// A program's value is held for one provider, as it was given, and
+    /// never printed; it is gone once the holding is.
     #[test]
-    fn a_held_kubeconfig_is_its_providers_and_applied_by_its_parts() {
-        let kc = "apiVersion: v1\ncurrent-context: c\ncontexts:\n- name: c\n  context: {cluster: k, user: u, namespace: shop}\n\
-                  clusters:\n- name: k\n  cluster: {server: \"https://k.example:6443\", certificate-authority-data: Q0E=}\n\
-                  users:\n- name: u\n  user: {token: s3cret}\n";
-        let parts = BTreeMap::from([("kubeconfig".to_string(), Secret::new(kc.into()))]);
+    fn a_held_kubeconfig_is_its_providers() {
+        let parts = BTreeMap::from([("kubeconfig".to_string(), Secret::new(b"s3cret".to_vec()))]);
         let h = hold(Kind::Kubeconfig, "k8s", parts);
         assert!(h.name().starts_with("kubeconfig:k8s."), "{}", h.name());
-        assert!(held(h.name(), "other").is_none(), "another provider's");
-        let c = held(h.name(), "k8s").unwrap().unwrap();
-        assert_eq!(c.endpoint.as_deref(), Some("https://k.example:6443"));
-        assert_eq!(c.namespace.as_deref(), Some("shop"));
-        assert_eq!(c.ca.as_deref(), Some(&b"CA"[..]));
-        assert_eq!(c.headers[0].1.expose(), b"Bearer s3cret");
-        assert!(!format!("{c:?}").contains("s3cret"));
+        assert!(
+            held_settings(h.name(), "other").is_none(),
+            "another provider's"
+        );
+        let given = held_settings(h.name(), "k8s").unwrap();
+        assert_eq!(given["kubeconfig"].expose(), b"s3cret");
+        assert!(!format!("{given:?}").contains("s3cret"));
         let name = h.name().to_string();
         drop(h);
-        assert!(held(&name, "k8s").is_none(), "released");
+        assert!(held_settings(&name, "k8s").is_none(), "released");
     }
 
     /// Settings of a kind that is one value are one setting.

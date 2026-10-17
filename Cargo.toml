@@ -8,6 +8,7 @@ members = [
     "crates/dform-k8s",
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
+    "crates/dform-provider-k8s/signer",
     "crates/dform-provider-ovh",
     "crates/dform-provider-ovh/signer",
     "crates/dform-provider-postgres",
@@ -37,6 +38,7 @@ default-members = [
     "crates/dform-k8s",
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
+    "crates/dform-provider-k8s/signer",
     "crates/dform-provider-ovh",
     "crates/dform-provider-ovh/signer",
     "crates/dform-provider-postgres",
@@ -180,6 +182,10 @@ base64 = "0.22"
 # tests/credentials_signed.rs its signer, in-process.
 dform-provider-ovh = { path = "crates/dform-provider-ovh", features = ["fake"] }
 dform-provider-ovh-signer = { path = "crates/dform-provider-ovh/signer" }
+# tests/credentials_signed.rs, tests/host_grpc.rs, tests/host_pace.rs,
+# tests/k8s_cluster.rs: a kubeconfig made by the k8s provider's signer,
+# in-process.
+dform-provider-k8s-signer = { path = "crates/dform-provider-k8s/signer" }
 # tests/provider_postgres.rs: the Postgres provider against a fake server.
 dform-provider-postgres = { path = "crates/dform-provider-postgres", features = ["fake"] }
 # tests/vault_scheme.rs: the Vault provider's scheme against a fake Vault.

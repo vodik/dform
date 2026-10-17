@@ -1,0 +1,28 @@
+[package]
+name = "dform-provider-k8s-signer"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# The Kubernetes provider's signer (dform-signer): the operator's
+# kubeconfig made into a `kubeconfig` credential's material (its
+# server, CA, client certificate, token or exec plugin's answer), which
+# dform's host applies. dform's host runs it apart from the provider:
+# built as a component (`cargo build --target wasm32-wasip3 --features
+# component`, `cargo xtask components`) that imports nothing, or in the
+# native provider's process (`dform-k8s`).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+component = ["dform-signer/component"]
+
+[dependencies]
+dform-signer = { path = "../../dform-signer" }
+# A kubeconfig is YAML: libyaml as Rust, `no_std` (serde_yaml's parser).
+unsafe-libyaml = "0.2"
+# An exec plugin's answer is JSON (an `ExecCredential`).
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+# A kubeconfig's `-data` is base64, and so is a Basic header.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }

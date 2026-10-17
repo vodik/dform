@@ -4,7 +4,7 @@
 
 use crate::signed::{self, Source, Steps};
 use crate::{git, http, ratelimit, ssh};
-use dform_core::plugin::credentials::{self, Credential, Kind};
+use dform_core::plugin::credentials::{self, Credential};
 use dform_core::plugin::host::{
     Calls, Endpoint, Error, Failure, GitFile, Grants, Handle, HttpRequest, HttpResponse, Level,
     Opened, Run, Target,
@@ -17,9 +17,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
-/// How long before it expires a credential is opened again for the next
-/// request (an exec plugin's token: the plugin runs again), so no request
-/// goes out with a token that lapses on its way.
+/// How long before it expires a credential is made again for the next
+/// request (a kubeconfig's exec plugin's token: its signer asks the
+/// plugin run again), so no request goes out with a token that lapses on
+/// its way.
 const RENEW_BEFORE: Duration = Duration::from_secs(10);
 
 /// One provider's host: its grants and clients, which its calls only
@@ -133,7 +134,7 @@ impl Services {
         Ok((cred, via))
     }
 
-    /// The credential opened as `h`, opened again first when it expires
+    /// The credential opened as `h`, made again first when it expires
     /// within [`RENEW_BEFORE`] (an exec plugin's token).
     fn credential(&self, h: Handle) -> Result<Arc<Credential>, Error> {
         let opened = || {
@@ -168,7 +169,9 @@ impl Services {
     /// error is why it does not load: its name is one the engine made,
     /// which the user never wrote.
     fn load(&self, name: &str) -> Result<Credential, Error> {
-        if let Ok((Kind::Signed, _)) = credentials::parse_name(name) {
+        if let Ok((kind, _)) = credentials::parse_name(name)
+            && kind.made_by_signer()
+        {
             return self.signed(name, None);
         }
         if let Some(held) = credentials::held(name, &self.grants.provider) {
@@ -223,18 +226,18 @@ impl Services {
 }
 
 impl Services {
-    /// The `signed` credential `name`, as the provider's signer makes it
-    /// of the operator's grant (`crate::signed`), or renews it from its
-    /// last `material`.
+    /// The credential `name` of a kind its provider's signer makes
+    /// (`signed`, `kubeconfig`), as the signer makes it of the operator's
+    /// grant (`crate::signed`), or renews it from its last `material`.
     fn signed(&self, name: &str, material: Option<&Material>) -> Result<Credential, Error> {
         let provider = &self.grants.provider;
+        let source = Source::of(name, provider, || self.grants.credential(name))?;
         let signer = self.signer.get().ok_or_else(|| {
             Error::fatal(format!(
-                "provider {provider}: the credential {name} is signed, and the provider has no \
-                 signer"
+                "provider {provider}: the credential {name} is its signer's to make, and the \
+                 provider has no signer"
             ))
         })?;
-        let source = Source::of(name, provider, || self.grants.credential(name))?;
         let steps = Steps {
             host: self,
             signer: signer.as_ref(),
@@ -358,49 +361,8 @@ impl Calls for Services {
 mod tests {
     use super::*;
     use dform_core::http::fake::Server;
-    use dform_core::plugin::credentials::Secret;
+    use dform_core::plugin::credentials::{Kind, Secret};
     use dform_core::plugin::signer::{Command, Got, Need, Outcome, Recipe, Request};
-
-    /// A kubeconfig held for the provider `p` whose exec plugin answers
-    /// `t1`, `t2`, .. (one more each run, counted in `dir`), expiring at
-    /// `expires`; the server is `url`.
-    fn exec_kubeconfig(dir: &std::path::Path, url: &str, expires: &str) -> credentials::Holding {
-        let script = "n=$(( $(cat \"$DIR/runs\" 2>/dev/null || echo 0) + 1 )); echo $n > \"$DIR/runs\"; \
-                      printf '{\"status\": {\"token\": \"t%s\", \"expirationTimestamp\": \"%s\"}}' $n \"$EXP\"";
-        let kc = serde_json::json!({
-            "current-context": "c",
-            "contexts": [{"name": "c", "context": {"cluster": "k", "user": "u"}}],
-            "clusters": [{"name": "k", "cluster": {"server": url}}],
-            "users": [{"name": "u", "user": {"exec": {
-                "apiVersion": "client.authentication.k8s.io/v1",
-                "command": "sh", "args": ["-c", script],
-                "env": [{"name": "DIR", "value": dir.display().to_string()},
-                        {"name": "EXP", "value": expires}]}}}]
-        });
-        let parts = [(
-            "kubeconfig".to_string(),
-            Secret::new(kc.to_string().into_bytes()),
-        )];
-        credentials::hold(Kind::Kubeconfig, "p", parts.into())
-    }
-
-    /// The tokens two requests carry, sent with the credential `held`
-    /// opened once.
-    fn two_requests(server: &Server, held: &credentials::Holding) -> Vec<String> {
-        let host = Services::new(Grants::none("p"));
-        let h = host.open(held.name()).unwrap().handle;
-        (0..2)
-            .map(|_| {
-                let req = HttpRequest {
-                    method: "GET".into(),
-                    url: server.url("/"),
-                    ..HttpRequest::default()
-                };
-                let r = host.send(req, Some(h), None).unwrap();
-                String::from_utf8(r.body).unwrap()
-            })
-            .collect()
-    }
 
     /// A signer that makes a bearer token of the value the grant gives
     /// (here a setting held for the provider), which expires at `expires`,
@@ -532,29 +494,5 @@ mod tests {
         let h = host.open(held.name()).unwrap().handle;
         let c = host.credential(h).unwrap();
         assert_eq!(c.headers[0].1.expose(), b"Bearer from-exec");
-    }
-
-    /// An exec plugin's token is used until it expires, then the plugin
-    /// runs again for the next request; one that does not expire runs
-    /// once.
-    #[test]
-    fn an_exec_plugins_token_is_renewed_when_it_expires() {
-        let server = Server::http1();
-        server.answer(|s| {
-            (
-                200,
-                Vec::new(),
-                s.header("authorization").unwrap_or("").into(),
-            )
-        });
-        let dir = std::env::temp_dir().join(format!("dform-renew-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let held = exec_kubeconfig(&dir, &server.url(""), "2000-01-01T00:00:00Z");
-        assert_eq!(two_requests(&server, &held), ["Bearer t2", "Bearer t3"]);
-        std::fs::remove_file(dir.join("runs")).unwrap();
-        let held = exec_kubeconfig(&dir, &server.url(""), "2999-01-01T00:00:00Z");
-        assert_eq!(two_requests(&server, &held), ["Bearer t1", "Bearer t1"]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

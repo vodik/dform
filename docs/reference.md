@@ -40,8 +40,9 @@ provider in `$XDG_DATA_HOME/dform/providers`
 installed; `--features F` adds dform's features. A provider built as a
 wasm provider is installed as one, `dform-provider-NAME.wasm` (the
 Kubernetes and OVH providers, which their `dform.toml` table grants
-what docs/providers.md says), with its signer beside it when it has one
-(`dform-provider-ovh_signer.wasm`), the others as their executables. A
+what docs/providers.md says), with its signer beside it
+(`dform-provider-k8s_signer.wasm`, `dform-provider-ovh_signer.wasm`),
+the others as their executables. A
 package's build calls `cargo xtask install --prefix DIR`: dform in
 `DIR/bin`, the providers in `DIR/lib/dform/providers`.
 
@@ -1376,8 +1377,9 @@ credentials = ["kubeconfig:environment"]
 Without either the provider is offline, saying which grant it lacks:
 `k8s: offline, provider k8s is not granted the credential
 kubeconfig:environment (the environment's kubeconfig): add it to
-[providers.k8s] credentials in dform.toml`. dform reads the kubeconfig
-(running its user's exec plugin, if it has one) and holds it; the
+[providers.k8s] credentials in dform.toml`. The provider's signer reads
+the kubeconfig and dform holds what it makes (dform reads its files and
+runs its user's exec plugin, if it has one, for the signer); the
 provider sends every request through dform's HTTP with it applied, by
 name, and never holds a credential (docs/providers.md, "Grants and
 credentials"). Select it by path; the program the mock plans applies to a
@@ -1541,9 +1543,9 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   once, `k8s: offline, provider k8s: the credential kubeconfig:environment:
   no kubeconfig at ~/.kube/config and not in a cluster; planning against
   the snapshot schema (crates/dform-k8s/openapi-snapshot.json)` (or that
-  dform.toml does not grant it, `the kubeconfig at P does not load`, `the
-  cluster at URL did not answer`); why, under
-  `DFORM_LOG=debug`.
+  dform.toml does not grant it, `the kubeconfig at P: ..` why it does
+  not load, `the cluster at URL did not answer`); the chain of errors
+  behind it, under `DFORM_LOG=debug`.
 
 ```bash
 cargo build

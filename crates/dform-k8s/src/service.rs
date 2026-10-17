@@ -3,7 +3,8 @@
 //! Configure finds the cluster (the environment's kubeconfig, which the
 //! host opens for it where dform.toml grants it, `credentials =
 //! ["kubeconfig:environment"]`: `KUBECONFIG`, `~/.kube/config`, or the
-//! pod's service account) and derives the schema from its `/openapi/v3`,
+//! pod's service account, as its signer reads it,
+//! `dform_provider_k8s_signer`) and derives the schema from its `/openapi/v3`,
 //! cached as `k8s-openapi.json` in the cache directory Configure names
 //! (`dform.state/cache/`; else beside the world file; `crate::cache`).
 //! With no cluster to reach, or `DFORM_K8S_OFFLINE` set (natively: a wasm
@@ -1057,6 +1058,12 @@ pub struct Provider {
 }
 
 impl Handler for Provider {
+    /// The signer of its `kubeconfig` credentials: the kubeconfig read
+    /// (`dform_provider_k8s_signer`), served beside the provider natively.
+    fn signer(&self) -> Option<Arc<dyn dform_core::plugin::signer::Signer + Send + Sync>> {
+        Some(Arc::new(dform_provider_k8s_signer::Kube))
+    }
+
     async fn handle(
         &self,
         session: Session,

@@ -570,7 +570,7 @@ impl Link {
                 _ => None,
             })
             .collect();
-        let environment = self.credentials.values().filter(|k| k.in_environment());
+        let environment = self.credentials.values().filter(|k| k.made_by_signer());
         for k in environment.filter(|_| !configured) {
             let name = format!("{}:{}", k.as_str(), credentials::ENVIRONMENT);
             named.entry(k.as_str()).or_insert_with(|| json!(name));
@@ -786,17 +786,20 @@ mod tests {
         assert!(name.starts_with("kubeconfig:kube."), "{sent}");
         assert_eq!(sent["settings"]["namespace"], "shop");
         assert!(!sent.to_string().contains("https://k"), "{sent}");
-        let c = credentials::held(&name, "kube").unwrap().unwrap();
-        assert_eq!(c.endpoint.as_deref(), Some("https://k"));
-        assert!(credentials::held(&name, "other").is_none());
+        let given = credentials::held_settings(&name, "kube").unwrap();
+        assert_eq!(given["kubeconfig"].expose(), KC.as_bytes());
+        assert!(credentials::held_settings(&name, "other").is_none());
         // Its session again, with no settings: the environment's, by the
         // name a grant gives it, held for no one.
         l.configure(Session(1), wire::doc(&json!({}))).unwrap();
         let sent = holder.0.lock().unwrap()[1].clone();
         let env = sent["credentials"]["kubeconfig"].as_str().unwrap();
         assert_eq!(env, "kubeconfig:environment", "{sent}");
-        assert!(credentials::held(env, "kube").is_none(), "{sent}");
-        assert!(credentials::held(&name, "kube").is_none(), "let go");
+        assert!(credentials::held_settings(env, "kube").is_none(), "{sent}");
+        assert!(
+            credentials::held_settings(&name, "kube").is_none(),
+            "let go"
+        );
         // A deferred Configure holds nothing.
         l.configure(Session(1), wire::doc(&json!({"deferred": true})))
             .unwrap();

@@ -136,7 +136,9 @@ fn a_window_keeps_under_the_servers_stream_ceiling() {
     );
     let name = held.name();
     let limiter = Arc::new(Limiter::new("streams"));
-    let services = Arc::new(Services::paced(Grants::none("streams"), limiter.clone()));
+    let services = Services::paced(Grants::none("streams"), limiter.clone())
+        .with_signer(Arc::new(dform_provider_k8s_signer::Kube));
+    let services = Arc::new(services);
     let auth = services.open(name).unwrap().handle;
     let get = |i: usize| HttpRequest {
         method: "GET".into(),

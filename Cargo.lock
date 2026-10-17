@@ -1256,6 +1256,7 @@ dependencies = [
  "dform-k8s",
  "dform-lsp",
  "dform-mock",
+ "dform-provider-k8s-signer",
  "dform-provider-ovh",
  "dform-provider-ovh-signer",
  "dform-provider-postgres",
@@ -1399,6 +1400,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dform-core",
+ "dform-provider-k8s-signer",
  "dform-sdk",
  "serde",
  "serde_json",
@@ -1457,6 +1459,16 @@ dependencies = [
  "dform-core",
  "dform-k8s",
  "dform-sdk",
+]
+
+[[package]]
+name = "dform-provider-k8s-signer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dform-signer",
+ "serde_json",
+ "unsafe-libyaml",
 ]
 
 [[package]]

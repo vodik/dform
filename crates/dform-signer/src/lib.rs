@@ -144,6 +144,26 @@ pub struct Material {
     pub namespace: Option<String>,
 }
 
+impl core::fmt::Debug for Recipe {
+    /// What it is, never a secret it holds (a token, a header's value, a
+    /// key); what is not secret (a CA, a name, a proxy) is said.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Recipe::Bearer(_) => f.write_str("Bearer(..)"),
+            Recipe::Headers(h) => {
+                let names: Vec<&str> = h.iter().map(|(k, _)| k.as_str()).collect();
+                write!(f, "Headers({names:?})")
+            }
+            Recipe::Signed => f.write_str("Signed"),
+            Recipe::TlsClient(_) => f.write_str("TlsClient(..)"),
+            Recipe::Proxy(p) => write!(f, "Proxy({p:?})"),
+            Recipe::Ca(pem) => write!(f, "Ca({} bytes)", pem.len()),
+            Recipe::Insecure => f.write_str("Insecure"),
+            Recipe::ServerName(n) => write!(f, "ServerName({n:?})"),
+        }
+    }
+}
+
 impl Material {
     /// Whether each request is signed with it ([`Recipe::Signed`]).
     pub fn signs(&self) -> bool {
@@ -182,4 +202,31 @@ pub trait Signer {
     fn sign(&self, req: Request, material: &Material, now: u64) -> Result<Request, String>;
     /// The material renewed before it expires, at `now`.
     fn refresh(&self, material: &Material, now: u64) -> Result<Outcome, String>;
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` (or with `+00:00`, a fraction of a second
+/// dropped) as seconds since the epoch: when a credential expires, as
+/// the APIs a signer reads say it.
+pub fn parse_rfc3339(s: &str) -> Option<u64> {
+    let s = s.strip_suffix('Z').or_else(|| s.strip_suffix("+00:00"))?;
+    let (date, time) = s.split_once(['T', 't'])?;
+    let time = time.split('.').next()?;
+    let num = |x: &str| x.parse::<i64>().ok();
+    let d: Vec<i64> = date.split('-').map(num).collect::<Option<_>>()?;
+    let t: Vec<i64> = time.split(':').map(num).collect::<Option<_>>()?;
+    let ([y, m, d], [hh, mm, ss]) = (d.as_slice(), t.as_slice()) else {
+        return None;
+    };
+    if !(1..=12).contains(m) || !(1..=31).contains(d) || *hh > 23 || *mm > 59 || *ss > 60 {
+        return None;
+    }
+    // days_from_civil.
+    let y = if *m <= 2 { y - 1 } else { *y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = if *m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }

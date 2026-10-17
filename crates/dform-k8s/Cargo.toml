@@ -13,6 +13,11 @@ dform-core = { path = "../dform-core" }
 # The host's HTTP and credentials: the provider's only way to the API
 # server (cluster.rs).
 dform-sdk = { path = "../dform-sdk" }
+# Its signer (`../dform-provider-k8s/signer`): the kubeconfig read and made
+# into the credential's material, run by dform's host apart from the
+# provider; served natively beside it, a component of its own for the
+# wasm build.
+dform-provider-k8s-signer = { path = "../dform-provider-k8s/signer" }
 # The chain of errors behind an offline line, under `DFORM_LOG=debug`
 # (`dform_core::log`).
 tracing = { version = "0.1", default-features = false, features = ["std"] }
