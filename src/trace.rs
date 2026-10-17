@@ -132,40 +132,83 @@ mod endpoint {
 }
 
 /// OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT`, a layer of the run's
-/// subscriber beside the trace file.
+/// subscriber beside the trace file. Its spans are sent in batches as
+/// they end, the run's own last: at the run's end what is queued is sent
+/// at the collector's pace, as long as it takes them ([`Export::flush`]),
+/// and what it did not take is said.
 #[cfg(feature = "otel")]
 mod endpoint {
     use anyhow::{Context, Result};
     use opentelemetry::trace::{TraceContextExt, TracerProvider};
     use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
-    use opentelemetry_otlp::{SpanExporter, WithHttpConfig};
+    use opentelemetry_otlp::WithHttpConfig;
     use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::trace::SdkTracerProvider;
-    use std::sync::OnceLock;
-    use std::time::Duration;
+    use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
+    use opentelemetry_sdk::trace::{
+        BatchSpanProcessor, SdkTracerProvider, SpanData, SpanExporter, SpanProcessor,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::{Duration, Instant};
     use tracing_opentelemetry::OpenTelemetrySpanExt;
     use tracing_subscriber::Layer;
 
-    /// The provider the spans are exported through, shut down (flushed)
-    /// at the run's end.
-    static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
+    /// A request's timeout: OTLP's default for an export
+    /// (`OTEL_EXPORTER_OTLP_TIMEOUT`), which bounds when the exporter
+    /// starts a retry.
+    const REQUEST: Duration = Duration::from_secs(10);
+
+    /// How long the run's end waits on a collector that takes no span:
+    /// an export's retries, and the last one's request.
+    const STALL: Duration = REQUEST.saturating_mul(2);
+
+    /// The exporter, flushed at the run's end.
+    static EXPORTER: OnceLock<Export> = OnceLock::new();
+
+    /// The batch processor the spans are exported through, and what of
+    /// them reached the collector.
+    struct Export {
+        batch: Arc<BatchSpanProcessor>,
+        tally: Arc<Tally>,
+    }
+
+    /// The spans the run ended and those the collector took; the exports
+    /// that failed, and the last one's error.
+    #[derive(Debug, Default)]
+    struct Tally {
+        ended: AtomicUsize,
+        sent: AtomicUsize,
+        failed: AtomicUsize,
+        error: Mutex<Option<String>>,
+    }
 
     /// The exporter's layer, when the endpoint is set.
     pub fn layer() -> Result<Option<super::Boxed>> {
         if std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_none_or(|v| v.is_empty()) {
             return Ok(None);
         }
-        let otlp = SpanExporter::builder()
+        let mut otlp = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
             .with_http_client(OneClient)
             .build()
             .context("the OTLP exporter (OTEL_EXPORTER_OTLP_ENDPOINT)")?;
+        otlp.set_resource(&Resource::builder().with_service_name("dform").build());
+        let tally = Arc::new(Tally::default());
+        let batch = Arc::new(
+            BatchSpanProcessor::builder(Tallied {
+                otlp,
+                tally: tally.clone(),
+            })
+            .build(),
+        );
         let provider = SdkTracerProvider::builder()
-            .with_resource(Resource::builder().with_service_name("dform").build())
-            .with_batch_exporter(otlp)
+            .with_span_processor(Counted {
+                batch: batch.clone(),
+                tally: tally.clone(),
+            })
             .build();
         let tracer = provider.tracer("dform");
-        let _ = PROVIDER.set(provider);
+        let _ = EXPORTER.set(Export { batch, tally });
         Ok(Some(
             tracing_opentelemetry::layer()
                 .with_tracer(tracer)
@@ -178,19 +221,148 @@ mod endpoint {
 
     /// The trace id OpenTelemetry gave the run's span.
     pub fn trace_id(span: &tracing::Span) -> Option<String> {
-        PROVIDER.get()?;
+        EXPORTER.get()?;
         Some(span.context().span().span_context().trace_id().to_string())
     }
 
+    /// The run's spans sent ([`Export::finish`]).
     pub fn finish() {
-        if let Some(p) = PROVIDER.get()
-            && let Err(e) = p.shutdown()
-        {
-            eprintln!("warning: the trace was not all sent: {e}");
+        if let Some(e) = EXPORTER.get() {
+            e.finish();
         }
     }
 
-    /// OTLP over the one HTTP client (R-103, `dform_core::http`).
+    impl Export {
+        /// Every span the run ended sent, then the exporter shut down (its
+        /// result unread: the tally knows what was lost); what the
+        /// collector did not take said.
+        fn finish(&self) {
+            if self.flush() {
+                let _ = self.batch.shutdown();
+            }
+            if let Some(lost) = self.tally.lost() {
+                eprintln!("warning: the trace was not all sent: {lost}");
+            }
+        }
+
+        /// Send what is queued. The batch processor's flush waits 5s
+        /// whatever it holds, its exports going on past it, so it is asked
+        /// again while the collector takes them: a slow one is sent the
+        /// run's last batches, the run's span among them, at its pace.
+        /// `false`, an export still going, once one fails (the rest would
+        /// too) or none is taken for [`STALL`].
+        fn flush(&self) -> bool {
+            let failed = self.tally.failed();
+            let mut taken = (self.tally.sent(), Instant::now());
+            loop {
+                if !matches!(self.batch.force_flush(), Err(OTelSdkError::Timeout(_))) {
+                    // Drained: sent, or its failure tallied.
+                    return true;
+                }
+                if self.tally.failed() != failed {
+                    return false;
+                }
+                let sent = self.tally.sent();
+                if sent != taken.0 {
+                    taken = (sent, Instant::now());
+                } else if taken.1.elapsed() >= STALL {
+                    return false;
+                }
+            }
+        }
+    }
+
+    impl Tally {
+        fn sent(&self) -> usize {
+            self.sent.load(Ordering::Acquire)
+        }
+
+        fn failed(&self) -> usize {
+            self.failed.load(Ordering::Acquire)
+        }
+
+        /// The spans the collector did not take, how many and why.
+        fn lost(&self) -> Option<String> {
+            let ended = self.ended.load(Ordering::Acquire);
+            let lost = ended.saturating_sub(self.sent());
+            let why = self.error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            (lost > 0).then(|| {
+                format!(
+                    "{lost} of its {ended} spans did not reach the collector: {}",
+                    why.unwrap_or_else(|| format!("it took none in {}s", STALL.as_secs()))
+                )
+            })
+        }
+
+        /// An export of `n` spans settled with `r`.
+        fn export(&self, n: usize, r: &OTelSdkResult) {
+            match r {
+                Ok(()) => {
+                    self.sent.fetch_add(n, Ordering::AcqRel);
+                }
+                Err(e) => {
+                    *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                    self.failed.fetch_add(1, Ordering::AcqRel);
+                }
+            }
+        }
+    }
+
+    /// The batch processor as the provider's, each span counted as it
+    /// ends (one its queue had no room for included: it is lost, not
+    /// sent).
+    #[derive(Debug)]
+    struct Counted {
+        batch: Arc<BatchSpanProcessor>,
+        tally: Arc<Tally>,
+    }
+
+    impl SpanProcessor for Counted {
+        fn on_start(&self, span: &mut opentelemetry_sdk::trace::Span, cx: &opentelemetry::Context) {
+            self.batch.on_start(span, cx);
+        }
+
+        fn on_end(&self, span: SpanData) {
+            self.tally.ended.fetch_add(1, Ordering::AcqRel);
+            self.batch.on_end(span);
+        }
+
+        fn force_flush(&self) -> OTelSdkResult {
+            self.batch.force_flush()
+        }
+
+        fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+            self.batch.shutdown_with_timeout(timeout)
+        }
+
+        /// The exporter was given the run's resource as it was built.
+        fn set_resource(&mut self, _: &Resource) {}
+    }
+
+    /// The OTLP exporter, each export's spans tallied as it settles.
+    #[derive(Debug)]
+    struct Tallied {
+        otlp: opentelemetry_otlp::SpanExporter,
+        tally: Arc<Tally>,
+    }
+
+    impl SpanExporter for Tallied {
+        async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+            let n = batch.len();
+            let r = self.otlp.export(batch).await;
+            self.tally.export(n, &r);
+            r
+        }
+
+        fn set_resource(&mut self, resource: &Resource) {
+            self.otlp.set_resource(resource);
+        }
+    }
+
+    /// OTLP over the one HTTP client (R-103, `dform_core::http`): the
+    /// machine's CA and proxy, the pool's connection to the collector, its
+    /// own (the providers' windows are theirs, in the host). A request
+    /// blocks the exporter's thread, never the run's.
     #[derive(Debug)]
     struct OneClient;
 
@@ -207,7 +379,7 @@ mod endpoint {
                     .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v.as_bytes()).into()))
                     .collect(),
                 body: body.to_vec(),
-                timeout: Some(Duration::from_secs(10)),
+                timeout: Some(REQUEST),
                 ..Default::default()
             };
             let r = dform_core::http::send(req, None, None).map_err(|e| e.message)?;

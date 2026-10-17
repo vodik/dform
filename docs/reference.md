@@ -5414,6 +5414,13 @@ build's with the `otel` feature (`cargo build --release --features
 otel`), which a build without it ignores. With no trace asked for, the
 run is the same run.
 
+The exporter sends the spans in batches as they end, and the run's own
+span ends last: at the end the run sends what is still queued at the
+collector's pace, however many exports that takes, and stops waiting once
+an export fails or the collector takes nothing for 20s; then it says how
+many spans did not reach the collector, and why. The file is written as
+the spans end, its last line at the run's end.
+
 A run is one trace, under its `dform.run` span (`dform plan`); a run that
 fails says its trace id after the error. The spans:
 
