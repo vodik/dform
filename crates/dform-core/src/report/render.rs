@@ -151,39 +151,38 @@ impl Report {
 
     /// The `warning` section's lines (R-80), unindented: each rule the
     /// plan deletes every resource of, with what it deletes and the leaf
-    /// that changed since the last apply; each relation it empties.
+    /// that changed since the last apply; each set of resources a
+    /// relation that emptied takes; under each, the relations that
+    /// emptied it reads, as a chain. At `-v`, also the relations that
+    /// emptied which nothing deleted reads.
     pub(super) fn warning_lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         for w in &self.warnings {
+            let shown: Vec<String> = w.deleted.iter().take(3).map(|a| address_text(a)).collect();
+            let more = match w.deleted.len().saturating_sub(3) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
             match &w.statement {
                 Some(statement) => {
                     out.push(format!("{}  {statement}", w.name));
-                    let shown: Vec<String> =
-                        w.deleted.iter().take(3).map(|a| address_text(a)).collect();
-                    let more = match w.deleted.len().saturating_sub(3) {
-                        0 => String::new(),
-                        n => format!(" and {n} more"),
-                    };
                     let n = w.deleted.len();
                     out.push(format!(
                         "    deletes all {n} it derived at the last apply: {}{more}",
                         shown.join(", ")
                     ));
-                    if let Some(b) = &w.because {
-                        out.push(format!("    because {b}"));
-                    }
                 }
-                None => {
-                    let rows = match w.rows {
-                        1 => "1 row".to_string(),
-                        n => format!("{n} rows"),
-                    };
-                    out.push(format!(
-                        "{}  had {rows} at the last apply, has none now",
-                        relation_name(&w.name)
-                    ));
-                }
+                None => out.push(format!("deletes {}{more}", shown.join(", "))),
             }
+            if let Some(b) = &w.because {
+                out.push(format!("    because {b}"));
+            }
+            for (i, l) in w.lost.iter().enumerate() {
+                out.push(format!("{}because {}", "  ".repeat(i + 2), lost_line(l)));
+            }
+        }
+        if self.why >= Why::How {
+            out.extend(self.emptied_relations.iter().map(lost_line));
         }
         out
     }
@@ -328,11 +327,12 @@ impl Report {
     /// The warnings, and the hosts a reader may mistake for others.
     fn write_warnings(&self, rows: &mut Vec<Row>, style: Style) {
         let confusable = self.confusable_lines();
-        if !self.warnings.is_empty() || !confusable.is_empty() {
+        let warnings = self.warning_lines();
+        if !warnings.is_empty() || !confusable.is_empty() {
             rows.push(Row::plain(String::new()));
             let head = "warning";
             rows.push(Row::new(head, style.paint(Paint::Warn, head)));
-            for line in self.warning_lines().into_iter().chain(confusable) {
+            for line in warnings.into_iter().chain(confusable) {
                 rows.push(Row::plain(format!("  {line}")));
             }
         }
@@ -665,4 +665,14 @@ pub(super) struct Section<'a> {
     /// makes, which planned its changes against their offline schemas
     /// (R-193), as `later`'s provisional block says them.
     pub(super) provisional: Vec<String>,
+}
+
+/// A relation that emptied as the `warning` section says it: `active  had
+/// 1 row at the last apply, has none now`.
+fn lost_line(l: &crate::guardrail::Lost) -> String {
+    format!(
+        "{}  had {} at the last apply, has none now",
+        relation_name(&l.relation),
+        crate::guardrail::rows_text(l.rows)
+    )
 }

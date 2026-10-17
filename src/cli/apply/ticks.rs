@@ -905,9 +905,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 }
             }
         }
-        for e in self.r.emptied(&p.plan, &p.res, &|_| None) {
+        let emptied = self.r.emptied(&p.plan, &p.res, &|_| None).headlines;
+        if !emptied.is_empty() {
             self.still_held()?;
-            if !confirm_emptied(&self.teller, &e, self.deployment())? {
+            if !confirm_emptied(&self.teller, &emptied, self.deployment())? {
                 return Ok(Some(declined(self.deployment(), tick)));
             }
         }

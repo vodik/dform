@@ -302,10 +302,10 @@ pub(super) enum Run {
         /// before such a tick.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
-        /// A rule or relation this apply may empty: the plan's
-        /// `warning` names it and apply asks for it on its own, also
-        /// under `--yes`, unless named here: the rule's `FILE:LINE`, a
-        /// resource type it derives, or the relation. Repeatable; dform.toml
+        /// What this apply may empty: the plan's `warning` names it and
+        /// apply asks for it on its own, also under `--yes`, unless named
+        /// here: a rule's `FILE:LINE`, a resource type it deletes, or the
+        /// relation that emptied which takes the resources. Repeatable; dform.toml
         /// `[stacks.NAME] allow_empty` names them for every apply.
         #[arg(long = "allow-empty", value_name = "RULE")]
         allow_empty: Vec<String>,

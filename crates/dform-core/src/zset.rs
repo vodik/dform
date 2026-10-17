@@ -1136,7 +1136,8 @@ pub const DERIVED_AT_LAST_APPLY: &str = "derived_at_last_apply";
 /// binds something; a resource stated once is not one) by where it is
 /// written, its statement and the resources it derived; each relation of
 /// the program with its rows. A later plan that deletes every resource of
-/// a rule, or empties a relation, says so ([`emptied`]).
+/// a rule, or empties a relation, says so
+/// ([`crate::guardrail::emptied`]).
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Derived {
     pub rules: BTreeMap<String, DerivedRule>,
@@ -1189,7 +1190,7 @@ impl Derived {
             r.statement = site.statement;
             r.addresses.push(addr.to_string());
         }
-        out.rows = rows_of(res, relations);
+        out.rows = crate::guardrail::rows_of(res, relations);
         out
     }
 
@@ -1265,6 +1266,32 @@ pub struct NotPlanned {
     pub site: Option<crate::report::tree::Site>,
 }
 
+/// Whether a rule's `head` may derive the fact `f`: each column the
+/// value written, a copy's own name (`scoped(n, name)`) the name it is;
+/// unless `exact`, also one a variable binds.
+pub(crate) fn heads(head: &Atom, f: &Atom, exact: bool) -> bool {
+    head.pred == f.pred
+        && head
+            .args
+            .iter()
+            .zip(&f.args)
+            .all(|(h, v)| derives(h, v, exact))
+}
+
+/// Whether a head's column `h` may derive the value `v` ([`heads`]).
+pub(crate) fn derives(h: &Term, v: &Term, exact: bool) -> bool {
+    match h {
+        Term::Var(_) => !exact,
+        Term::Func { name, args } if name == crate::address::SCOPED => match (args.as_slice(), v) {
+            ([Term::Val(Value::Str(n)), Term::Val(Value::Str(a))], Term::Val(Value::Str(v))) => {
+                crate::address::scoped(n, a) == *v
+            }
+            _ => !exact,
+        },
+        h => h == v,
+    }
+}
+
 /// The statements `res` derives no resource of, each with why.
 pub fn not_planned(
     res: &crate::engine::EvalResult,
@@ -1287,25 +1314,7 @@ pub fn not_planned(
             };
             // Its statement's report: the one that names it, else one
             // whose name a variable binds.
-            let report = |exact: bool| {
-                res.rules.iter().position(|r| {
-                    r.head.pred == f.pred
-                        && r.head.args.iter().zip(&f.args).all(|(h, v)| match h {
-                            Term::Var(_) => !exact,
-                            // A copy's own resource, `scoped(n, name)`.
-                            Term::Func { name, args } if name == crate::address::SCOPED => {
-                                match (args.as_slice(), v) {
-                                    (
-                                        [Term::Val(Value::Str(n)), Term::Val(Value::Str(a))],
-                                        Term::Val(Value::Str(v)),
-                                    ) => crate::address::scoped(n, a) == *v,
-                                    _ => !exact,
-                                }
-                            }
-                            h => h == v,
-                        })
-                })
-            };
+            let report = |exact: bool| res.rules.iter().position(|r| heads(&r.head, f, exact));
             let rule = report(true)
                 .or_else(|| report(false))
                 .map(|i| format!("r{i}"));
@@ -1319,140 +1328,6 @@ pub fn not_planned(
             })
         })
         .collect()
-}
-
-/// A rule the plan deletes every resource of, or a relation it empties,
-/// since the last apply (R-80): what the plan's `warning` section names,
-/// and what `apply` asks for on its own.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Emptied {
-    /// A rule's place (`FILE:LINE`), or a relation's name.
-    pub name: String,
-    /// A rule's statement; `None` for a relation.
-    pub statement: Option<String>,
-    /// A rule's resources, every one deleted by the plan.
-    pub deleted: Vec<String>,
-    /// A relation's rows at the last apply.
-    pub rows: usize,
-    /// The leaf that changed since the last apply (R-79's `because`), of
-    /// the first deleted resource that says.
-    pub because: Option<String>,
-}
-
-impl Emptied {
-    /// `--allow-empty NAME` (or `[stacks.NAME] allow_empty`) names it: its
-    /// place, a resource type it deletes, or the relation.
-    pub fn allowed(&self, names: &[String]) -> bool {
-        names.iter().any(|n| {
-            *n == self.name
-                || *n == self.flag()
-                || self
-                    .deleted
-                    .iter()
-                    .any(|a| crate::address::parse_resource(a).is_ok_and(|a| a.typ == *n))
-        })
-    }
-
-    /// What `--allow-empty` names it by: its place, or the relation as
-    /// the source reads it, a copy's own by its path (`green.vpc_net`).
-    pub fn flag(&self) -> String {
-        match &self.statement {
-            Some(_) => self.name.clone(),
-            None => self.name.replace("::", "."),
-        }
-    }
-
-    /// The question `apply` asks of it, and the line it refuses with.
-    pub fn what(&self) -> String {
-        match &self.statement {
-            Some(_) => format!(
-                "the plan deletes all {} resources the rule at {} derived at the last apply",
-                self.deleted.len(),
-                self.name
-            ),
-            None => format!(
-                "the plan empties the relation {}, which had {} at the last apply",
-                crate::report::relation_name(&self.name),
-                count_rows(self.rows)
-            ),
-        }
-    }
-}
-
-fn count_rows(n: usize) -> String {
-    match n {
-        1 => "1 row".into(),
-        n => format!("{n} rows"),
-    }
-}
-
-/// How many rows each of `relations` has in `res`.
-fn rows_of(
-    res: &crate::engine::EvalResult,
-    relations: &BTreeSet<String>,
-) -> BTreeMap<String, usize> {
-    let mut rows: BTreeMap<String, usize> = relations.iter().map(|r| (r.clone(), 0)).collect();
-    for f in &res.facts {
-        if let Some(n) = rows.get_mut(&f.pred) {
-            *n += 1;
-        }
-    }
-    rows
-}
-
-/// The rows of each of `relations` (the lowered program's) in `res` that
-/// the guardrail may compare with the last apply's (R-80). A name the
-/// program has no relation of now (renamed, moved into a copy, removed)
-/// is not one that emptied, and neither is one whose rows wait on a value
-/// the plan does not know yet (a stuck instance of it, or one that may
-/// derive after a boundary): neither is a key.
-pub fn rows_now(
-    res: &crate::engine::EvalResult,
-    relations: &BTreeSet<String>,
-) -> BTreeMap<String, usize> {
-    let mut rows = rows_of(res, relations);
-    let waiting = res.stuck.iter().map(|s| &s.head.pred);
-    for pred in waiting.chain(res.may_derive.iter().map(|m| &m.head.pred)) {
-        rows.remove(pred);
-    }
-    rows
-}
-
-/// What the plan empties since the last apply `then`: each rule all of
-/// whose resources are in `deleted`, and each relation with rows then and
-/// none now (`now`, [`rows_now`]: one it has no key of is not compared).
-/// `because` is each address's leaf, when R-79 found one.
-pub fn emptied(
-    then: &Derived,
-    deleted: &BTreeSet<String>,
-    now: &BTreeMap<String, usize>,
-    because: &dyn Fn(&str) -> Option<String>,
-) -> Vec<Emptied> {
-    let mut out = Vec::new();
-    for (at, r) in &then.rules {
-        if r.addresses.is_empty() || !r.addresses.iter().all(|a| deleted.contains(a)) {
-            continue;
-        }
-        out.push(Emptied {
-            name: at.clone(),
-            statement: Some(r.statement.clone()),
-            deleted: r.addresses.clone(),
-            rows: 0,
-            because: r.addresses.iter().find_map(|a| because(a)),
-        });
-    }
-    for (rel, n) in &then.rows {
-        if *n > 0 && now.get(rel) == Some(&0) {
-            out.push(Emptied {
-                name: rel.clone(),
-                statement: None,
-                deleted: Vec::new(),
-                rows: *n,
-                because: None,
-            });
-        }
-    }
-    out
 }
 
 /// The plan file (`plan --out PLAN.json`, `apply PLAN.json`; E §2.8):

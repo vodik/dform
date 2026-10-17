@@ -25,6 +25,7 @@ pub mod git;
 #[path = "git_wasm.rs"]
 pub mod git;
 pub mod graph;
+pub mod guardrail;
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub mod hooks;

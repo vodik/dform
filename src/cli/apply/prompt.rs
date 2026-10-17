@@ -2,8 +2,8 @@
 //! no or a plan file bounds it.
 
 use crate::cli::Outcome;
+use crate::guardrail;
 use crate::said::{Question, Said, Teller};
-use crate::zset;
 use anyhow::{Result, bail};
 
 /// Ask on the terminal whether to apply `n` changes to `deployment`
@@ -89,23 +89,34 @@ fn answer() -> Result<String> {
     }
 }
 
-/// Ask whether to apply a plan that empties `e` (R-80), on a terminal
-/// only: there is no `--yes` for it, only `--allow-empty`. Answered no,
-/// `false`.
+/// Ask once whether to apply a plan that empties `emptied` (R-80), on a
+/// terminal only: there is no `--yes` for it, only `--allow-empty`.
+/// Answered no, `false`.
 pub(super) fn confirm_emptied(
     teller: &Teller,
-    e: &zset::Emptied,
+    emptied: &[guardrail::Emptied],
     deployment: &str,
 ) -> Result<bool> {
+    let what = emptied
+        .iter()
+        .map(|e| e.what())
+        .collect::<Vec<_>>()
+        .join("; ");
     if !can_ask() {
+        let flags = emptied
+            .iter()
+            .map(|e| format!("--allow-empty {}", e.flag()))
+            .collect::<Vec<_>>();
+        let (flags, it) = match flags.len() {
+            1 => (flags.concat(), "it is"),
+            _ => (flags.join(" "), "they are"),
+        };
         bail!(
-            "apply {deployment}: {}; nothing to ask on (stdin is not a terminal): confirm it \
-             on a terminal, or pass --allow-empty {} if it is meant",
-            e.what(),
-            e.flag()
+            "apply {deployment}: {what}; nothing to ask on (stdin is not a terminal): confirm \
+             it on a terminal, or pass {flags} if {it} meant"
         );
     }
-    ask(teller, Question::Emptied { what: e.what() })
+    ask(teller, Question::Emptied { what })
 }
 
 /// An apply whose confirmation of `tick` was answered no: at tick 1

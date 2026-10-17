@@ -4,7 +4,7 @@
 use super::evaluated::Context;
 use super::run_inputs::{answer_inputs, answer_text, env_inputs};
 use crate::provider::ActionKind;
-use crate::{address, deployment, engine, query, report, resources, state, stuck, zset};
+use crate::{address, deployment, engine, guardrail, query, report, resources, state, stuck, zset};
 use anyhow::{Result, bail};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -250,7 +250,7 @@ impl<'a> Reporter<'a> {
         plan: &crate::provider::Plan,
         res: &engine::EvalResult,
         because: &dyn Fn(&str) -> Option<String>,
-    ) -> Vec<zset::Emptied> {
+    ) -> guardrail::Emptying {
         // A destroy empties everything; its question says so.
         let Some(then) = self
             .cx
@@ -258,19 +258,18 @@ impl<'a> Reporter<'a> {
             .as_ref()
             .filter(|_| !self.cx.cli.cmd.destroys())
         else {
-            return Vec::new();
+            return guardrail::Emptying::default();
         };
-        let deleted: BTreeSet<String> = plan
+        let deleted: BTreeSet<address::Address> = plan
             .actions
             .iter()
             .filter(|a| matches!(a.kind, ActionKind::Delete))
-            .map(|a| a.addr.to_string())
+            .map(|a| a.addr.clone())
             .collect();
-        let now = zset::rows_now(res, &self.located.relations());
-        zset::emptied(then, &deleted, &now, because)
-            .into_iter()
-            .filter(|e| !e.allowed(&self.allow_empty))
-            .collect()
+        let now = guardrail::rows_now(res, &self.located.relations());
+        let mut e = guardrail::emptied(then, &res.rules, &now, &deleted, because);
+        e.headlines.retain(|e| !e.allowed(&self.allow_empty));
+        e
     }
 
     /// `report` explained at the run's level of why: at tick 1 also the
@@ -301,7 +300,9 @@ impl<'a> Reporter<'a> {
                 .iter()
                 .filter_map(|d| Some((d.addr.to_string(), d.because.clone()?)))
                 .collect();
-            report.warnings = self.emptied(plan, res, &|a| leaf.get(a).cloned());
+            let e = self.emptied(plan, res, &|a| leaf.get(a).cloned());
+            report.warnings = e.headlines;
+            report.emptied_relations = e.unread;
         }
         if let Some(top) = &self.top {
             report.relative_to(top);

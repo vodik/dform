@@ -179,8 +179,12 @@ pub struct Report {
     /// composite resource (R-67).
     pub instances: crate::zset::Instances,
     /// What the plan empties since the last apply (R-80): a rule all of
-    /// whose resources it deletes, a relation it leaves with no rows.
-    pub warnings: Vec<crate::zset::Emptied>,
+    /// whose resources it deletes, the resources a relation that emptied
+    /// takes with it.
+    pub warnings: Vec<crate::guardrail::Emptied>,
+    /// The relations that emptied since the last apply which no headline
+    /// of `warnings` reads: listed only at `-v`.
+    pub emptied_relations: Vec<crate::guardrail::Lost>,
     /// The statements that derive no resource, each with why (R-120).
     pub not_planned: Vec<crate::zset::NotPlanned>,
     /// The stack's keys: a value's chain ends at one (R-122).
@@ -351,6 +355,7 @@ pub fn report(i: &Input) -> Report {
         approvals: approvals(i.res),
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
         warnings: Vec::new(),
+        emptied_relations: Vec::new(),
         not_planned,
         kept: kept(i, &definite, (&r, &refs)),
         policy,

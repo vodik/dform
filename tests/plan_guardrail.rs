@@ -1,9 +1,11 @@
 //! R-80: a plan that deletes every resource a rule derived at the last
-//! apply, or empties a relation that had rows then, says so in a
-//! `warning` section with the leaf that changed (R-79's because), and
-//! apply asks for it on its own, also under `--yes`, unless
-//! `--allow-empty` (or the stack's `allow_empty`) names it. A deny reads
-//! the last apply's record as `derived_at_last_apply(rule, n)`.
+//! apply, or resources a relation that emptied since takes with it, says
+//! so in a `warning` section with the leaf that changed (R-79's because)
+//! and the relations that emptied under them, and apply asks for it once,
+//! on its own, also under `--yes`, unless `--allow-empty` (or the stack's
+//! `allow_empty`) names it. A relation that emptied with no resource is
+//! no warning (`-v` lists it). A deny reads the last apply's record as
+//! `derived_at_last_apply(rule, n)`.
 
 use crate::common;
 use common::Scratch;
@@ -62,10 +64,10 @@ const WARNING: &str = "warning\n  \
     net.subnet private-us-test-1b\n";
 
 /// A broken join: the one row of the table the join reads is gone, so
-/// every subnet goes. The plan's warning names the rule, what it deletes
-/// and the row that went, and the relation it empties; an unattended
-/// apply refuses, naming the flag, and changes nothing; with the flag it
-/// applies.
+/// every subnet goes. The plan's warning names the rule, what it deletes,
+/// the row that went and the relation it empties, under it; an
+/// unattended apply refuses, naming the flag, and changes nothing; with
+/// the flag it applies.
 #[test]
 fn a_broken_join_is_warned_and_asked_for() {
     let s = project("guard-join");
@@ -78,15 +80,13 @@ fn a_broken_join_is_warned_and_asked_for() {
     git(&s, &["commit", "-qam", "two"]);
     let r = s.run(&["plan", "net"]).success();
     let want = format!(
-        "{WARNING}      because data/active.csv no longer has the row active(\"east\")\n  \
-         active  had 1 row at the last apply, has none now\n"
+        "{WARNING}      because data/active.csv no longer has the row active(\"east\")\n      \
+         because active  had 1 row at the last apply, has none now\n"
     );
-    assert!(r.stdout.contains(&want), "{want}\n---\n{}", r.stdout);
     // The section is after the ticks, and last.
+    assert!(r.stdout.ends_with(&want), "{want}\n---\n{}", r.stdout);
     assert!(
-        r.stdout.find("\nwarning\n").unwrap() > r.stdout.find("tick 1").unwrap()
-            && r.stdout
-                .ends_with("active  had 1 row at the last apply, has none now\n"),
+        r.stdout.find("\nwarning\n").unwrap() > r.stdout.find("tick 1").unwrap(),
         "{}",
         r.stdout
     );
@@ -102,7 +102,8 @@ fn a_broken_join_is_warned_and_asked_for() {
     let r = s.run(&["plan", "net", "--json"]).success();
     let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(j["warnings"][0]["rule"], "stacks/net.df:13", "{j}");
-    assert_eq!(j["warnings"][1]["relation"], "active", "{j}");
+    assert_eq!(j["warnings"][0]["emptied"][0]["relation"], "active", "{j}");
+    assert_eq!(j["warnings"].as_array().unwrap().len(), 1, "{j}");
 
     let r = s.run(&["apply", "net", "--yes"]).failure();
     assert!(
@@ -115,26 +116,9 @@ fn a_broken_join_is_warned_and_asked_for() {
         r.stderr
     );
     assert_eq!(subnets(&s), 2, "the refused apply deleted");
-    // Naming the rule leaves the relation, which is asked for too.
-    let r = s
-        .run(&["apply", "net", "--yes", "--allow-empty", "stacks/net.df:13"])
-        .failure();
-    assert!(
-        r.stderr
-            .contains("the plan empties the relation active, which had 1 row at the last apply"),
-        "{}",
-        r.stderr
-    );
-    s.run(&[
-        "apply",
-        "net",
-        "--yes",
-        "--allow-empty",
-        "net.subnet",
-        "--allow-empty",
-        "active",
-    ])
-    .success();
+    // The relation is the rule's because, not a question of its own.
+    s.run(&["apply", "net", "--yes", "--allow-empty", "stacks/net.df:13"])
+        .success();
     assert_eq!(subnets(&s), 0);
 }
 
@@ -254,8 +238,10 @@ resource box green {{ cidr = \"10.0.0.0/16\", on = {on} }}
     s.write("stacks/net.df", &net("false"));
     let r = s.run(&["plan", "net"]).success();
     assert!(
-        r.stdout
-            .contains("vpc_net (in green)  had 1 row at the last apply, has none now\n"),
+        r.stdout.contains(
+            "\nwarning\n  deletes net.vpc green.v\n      \
+             because vpc_net (in green)  had 1 row at the last apply, has none now\n"
+        ),
         "{}",
         r.stdout
     );
@@ -295,4 +281,93 @@ resource net.vpc main { cidr = \"10.0.0.0/16\" }
     let r = s.run(&["plan", "net", "-v"]).success();
     assert!(r.stdout.contains("+ db.postgres d2"), "{}", r.stdout);
     assert!(!r.stdout.contains("warning"), "{}", r.stdout);
+}
+
+/// Resources stated once that read a `let` over a table, whose one row
+/// goes: no rule's resources, so the headline is the resources, the
+/// `let` and the table under it as a chain; apply asks once, naming both.
+#[test]
+fn resources_a_relation_takes_are_the_headline_and_asked_for_once() {
+    let s = project("guard-taken");
+    s.write(
+        "stacks/net.df",
+        r#"
+input active from csv.decode(io.read("data/active.csv"))
+decl active(name: string)
+use fake
+let east = true where active("east")
+resource net.vpc a { cidr = "10.0.0.0/16" } where east
+resource net.vpc b { cidr = "10.1.0.0/16" } where east
+"#,
+    );
+    s.run(&["apply", "net", "--yes"]).success();
+    s.write("data/active.csv", "name\n");
+    let r = s.run(&["plan", "net"]).success();
+    let want = "\nwarning\n  deletes net.vpc a, net.vpc b\n      \
+        because east  had 1 row at the last apply, has none now\n        \
+        because active  had 1 row at the last apply, has none now\n";
+    assert!(r.stdout.ends_with(want), "{want}\n---\n{}", r.stdout);
+    let r = s.run(&["apply", "net", "--yes"]).failure();
+    assert!(
+        r.stderr.contains(
+            "apply net: the plan deletes net.vpc a and net.vpc b because the relation east, \
+             which had 1 row at the last apply, has none now; nothing to ask on"
+        ),
+        "{}",
+        r.stderr
+    );
+    let mut cmd = common::dform();
+    cmd.args(["apply", "net", "--yes"]).current_dir(s.path(""));
+    let (said, _) = common::answering(&s.dir, cmd, &["n"]);
+    assert!(
+        said[0].ends_with(
+            "The plan deletes net.vpc a and net.vpc b because the relation east, which had 1 \
+             row at the last apply, has none now. Apply it anyway? [y/N] "
+        ),
+        "{said:?}"
+    );
+    assert!(
+        !said[1].contains("Apply it anyway"),
+        "asked twice: {said:?}"
+    );
+    s.run(&["apply", "net", "--yes", "--allow-empty", "active"])
+        .success();
+}
+
+/// A table whose rows go and a `let` over it that empties, read by no
+/// resource, in a plan that makes a resource: the plan warns of nothing
+/// and apply asks nothing; `-v` lists them.
+#[test]
+fn a_relation_no_resource_reads_is_no_warning() {
+    let s = project("guard-unread");
+    let net = r#"
+input active from csv.decode(io.read("data/active.csv"))
+decl active(name: string)
+use fake
+let east = true where active("east")
+resource net.vpc main { cidr = "10.0.0.0/16" }
+"#;
+    s.write("stacks/net.df", net);
+    s.run(&["apply", "net", "--yes"]).success();
+    s.write("data/active.csv", "name\n");
+    s.write(
+        "stacks/net.df",
+        &format!("{net}resource net.vpc spare {{ cidr = \"10.1.0.0/16\" }}\n"),
+    );
+    let r = s.run(&["plan", "net"]).success();
+    assert!(!r.stdout.contains("warning"), "{}", r.stdout);
+    let r = s.run(&["plan", "net", "-v"]).success();
+    assert!(
+        r.stdout.ends_with(
+            "\nwarning\n  active  had 1 row at the last apply, has none now\n  \
+             east  had 1 row at the last apply, has none now\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    let r = s.run(&["plan", "net", "--json"]).success();
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    assert!(j.get("warnings").is_none(), "{j}");
+    assert_eq!(j["emptied_relations"][1]["relation"], "east", "{j}");
+    s.run(&["apply", "net", "--yes"]).success();
 }

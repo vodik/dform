@@ -75,6 +75,9 @@ impl Report {
             j["kept"] = kept.into();
         }
         // What the plan empties (R-80), only when it empties something.
+        if !self.emptied_relations.is_empty() {
+            j["emptied_relations"] = self.emptied_relations.iter().map(lost_json).collect();
+        }
         if !self.warnings.is_empty() {
             j["warnings"] = self.warnings_json().into();
         }
@@ -209,13 +212,15 @@ impl Report {
         self.warnings
             .iter()
             .map(|w| {
+                let first = w.lost.first().filter(|_| w.statement.is_none());
                 json!({
                     "rule": w.statement.as_ref().map(|_| w.name.clone()),
                     "statement": w.statement,
-                    "relation": w.statement.is_none().then(|| w.name.clone()),
+                    "relation": first.map(|l| l.relation.clone()),
                     "deletes": w.deleted,
-                    "rows_at_last_apply": w.statement.is_none().then_some(w.rows),
+                    "rows_at_last_apply": first.map(|l| l.rows),
                     "because": w.because,
+                    "emptied": w.lost.iter().map(lost_json).collect::<Vec<_>>(),
                 })
             })
             .collect()
@@ -350,4 +355,9 @@ fn diag_json(d: &Diag) -> Json {
             "from": w.from,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// A relation that emptied since the last apply: `{relation, rows_at_last_apply}`.
+fn lost_json(l: &crate::guardrail::Lost) -> Json {
+    json!({ "relation": l.relation, "rows_at_last_apply": l.rows })
 }

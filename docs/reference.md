@@ -1889,27 +1889,38 @@ made; the plan itself says what it is.
   when its body reads it: `not p.securityContext.runAsNonRoot == true`
   over a pod spec the program wrote is decided before the cluster exists. A type whose namespace names no provider is the compile
   error it always was.
-- `warning`: what the plan empties since the last apply: a
-  rule the plan deletes every resource of that it derived at the last
-  apply, by its `FILE:LINE` and statement, with what it deletes (`deletes
-  all 2 it derived at the last apply: ..`, three named and `and N more`)
-  and the leaf that changed since (its `because`, when there is one);
-  and a relation of the program that had rows at the last apply and has
-  none now (`active  had 1 row at the last apply, has none now`). A rule
+- `warning`: the resources the plan deletes of what the last apply
+  derived, when that looks like an accident: a rule the plan deletes
+  every resource of that it derived at the last apply, by its
+  `FILE:LINE` and statement, with what it deletes (`deletes all 2 it
+  derived at the last apply: ..`, three named and `and N more`), and
+  resources a relation that emptied takes with it (`deletes net.vpc a,
+  net.vpc b`). Under each, the leaf that changed since (its `because`,
+  when there is one), and the relations of the program that had rows at
+  the last apply and have none now that its rule reads, as a chain, the
+  one it reads first, then the one that one reads (`because east  had 1
+  row at the last apply, has none now`, `because active  had ..`
+  indented under it). A headline is always resources: a relation (a
+  `let`, a table) that emptied with no resource going is no warning, as
+  a refactor empties many; `-v` lists those too. A name the program has
+  no relation of now (a `let` renamed or moved) did not empty, nor did
+  one whose rows wait on a value the plan does not know yet. A rule
   is one that binds variables (a `where` with a join, an `in`); a
   resource stated once is not. A broken join and a deliberate delete look
-  alike to the plan, so it says so, and `apply` asks for each on its own.
-  Under `--yes`, or of a plan file, `apply` still asks for each, on a
+  alike to the plan, so it says so, and `apply` asks once for all of it.
+  Under `--yes`, or of a plan file, `apply` still asks, on a
   terminal (`The plan deletes all 2 resources the rule at
   stacks/net.df:13 derived at the last apply. Apply it anyway? [y/N]`),
   and with none to ask on it refuses before changing anything, naming
-  the flag: `apply --allow-empty RULE` (repeatable) or `[stacks.NAME]
+  the flags: `apply --allow-empty NAME` (repeatable) or `[stacks.NAME]
   allow_empty` in dform.toml names those that may empty without a word: a rule's `FILE:LINE`, a resource type it derives, or
-  the relation (a copy's own, which the warning names `vpc_net (in
+  of resources a relation takes, a relation of its chain (a copy's own, which the warning names `vpc_net (in
   green)`, by its path, `green.vpc_net`). What each apply derived is the audit log's `derived`
   entry; a plan with no apply before it warns of nothing. `--json`
   carries them as `warnings` (each `{rule, statement, relation, deletes,
-  rows_at_last_apply, because}`), only when there is one. A host label a
+  rows_at_last_apply, because, emptied}`, `emptied` the chain as
+  `{relation, rows_at_last_apply}`), only when there is one, and the
+  relations that emptied which no warning reads as `emptied_relations`. A host label a
   reader may mistake for another (UTS 39) is one too, at every
   level, `-q` included: one that mixes scripts (`host label "exаmple"
   mixes Latin and Cyrillic  net.vpc main.tags.host  p.df:6`) or one
