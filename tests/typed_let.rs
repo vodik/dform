@@ -187,7 +187,7 @@ fn a_network_and_a_subnet_of_one_name_are_the_network_in_networks() {
     )
     .unwrap();
     let src = "\nuse ovh\n\n\
-               resource ovh.network lab { name = \"lab\", vlan = 42 }\n\
+               resource ovh.network lab { name = \"lab\", vlan_id = 42 }\n\
                resource ovh.subnet lab {\n  network = lab\n  region = \"BHS5\"\n  range = \"10.42.0.0/24\"\n}\n\
                resource ovh.instance a { networks = [lab] }\n\
                resource ovh.instance b { networks = [{ network = lab, ip = \"10.42.0.9\" }] }\n";
