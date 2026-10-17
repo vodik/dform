@@ -304,7 +304,15 @@ Deployments that read nothing of each other (a project's `prod` and
 `staging`) wait on nothing. A replace in an upstream's plan makes what its evaluation knew
 of the replaced object (a computed endpoint) known only after a tick: a
 reader that read the old value is planned again over the plan's before
-it says anything. The plan prints as it did, each deployment's section
+it says anything. A provider is never configured from what an upstream's
+plan has not settled: one whose settings read an upstream's output (`use
+k8s { kubeconfig = platform.kubeconfig }`) waits for that upstream's plan
+(`waits on stacks.platform[env=lab]`, until `planned`), so no call goes
+to a server the plan replaces; its rows then wait on the provider,
+provisional. A deployment whose plan changes nothing but holds rows says
+so, never `up to date`: `~ stacks.apps  up to date but for 1 held,
+waiting on provider k8s  kubeconfig = platform.kubeconfig`, its held
+section under it. The plan prints as it did, each deployment's section
 in the tree's order whatever order they finished in; what deployments
 say on stderr as they go (a warning, a note) may interleave. `--json` nests the same: `summary`, `outcome`, and per
 deployment its `deployment`, `mark`, `site`, `state` and its own

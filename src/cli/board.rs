@@ -15,7 +15,7 @@
 
 use crate::stack::Planned;
 use anyhow::{Result, bail};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// How far a deployment of the tree's plan is.
@@ -225,6 +225,37 @@ impl Upstreams {
             Verdict::Again => bail!("planned again: what it reads changed in their plans"),
             Verdict::NotPlanned(why) => bail!("not planned: {why}"),
         }
+    }
+
+    /// Once those of `names` it reads (as it names them) are planned: an
+    /// error when one was not, or made known other than the run read
+    /// (it is planned again over the plans'). What a provider configured
+    /// from their outputs waits on (`deployment::Settle`).
+    pub(super) fn settle(&self, names: &BTreeSet<String>) -> Result<()> {
+        let of: Vec<usize> = self
+            .of
+            .iter()
+            .copied()
+            .filter(|&j| names.contains(&self.board.names[j]))
+            .collect();
+        let known = self.board.wait(&of, Known::settled, "planned");
+        let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
+        for &j in &of {
+            let name = &self.board.names[j];
+            match &known[j] {
+                Known::Stopped(why) => bail!("not planned: {why}"),
+                Known::Planned(Some(p))
+                    if !read
+                        .as_ref()
+                        .and_then(|r| r.get(name))
+                        .is_some_and(|r| r.knows_alike(p)) =>
+                {
+                    bail!("planned again: what it reads changed in their plans")
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// What the run comes to, once those it reads are planned.

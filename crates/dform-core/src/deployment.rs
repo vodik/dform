@@ -548,7 +548,18 @@ pub struct Options<'a> {
     /// reader opened of its upstreams' outputs registered there before
     /// the evaluation; what derives from `master` set there as it starts.
     pub secrets: Rc<crate::secrets::Run>,
+    /// A run of a deployment of a tree: before a provider is configured
+    /// from what other deployments of the tree make known ([`Settle`]).
+    pub settle: Option<Settle>,
 }
+
+/// Before a provider is configured from the outputs of the deployments
+/// named (as the program names them, `platform[env=lab]`), their plans
+/// settle them: what the evaluation read of them is what their plans make
+/// known, else an error (the run is planned again over the plans'). A
+/// provider is never configured from a value its upstream's plan is about
+/// to change: the address of a server it replaces.
+pub type Settle = Rc<dyn Fn(&BTreeSet<String>) -> Result<()>>;
 
 impl<'a> Options<'a> {
     /// Nothing given, nothing checked beyond evaluating.
@@ -570,6 +581,7 @@ impl<'a> Options<'a> {
             last_apply: Vec::new(),
             destroy: false,
             secrets: Rc::default(),
+            settle: None,
         }
     }
 }
@@ -640,6 +652,9 @@ pub struct Evaluator {
     secret_settings: BTreeMap<String, BTreeSet<String>>,
     /// Every plan is against an empty wanted set (`Options::destroy`).
     destroy: bool,
+    /// What settles the outputs of the tree a provider is configured from
+    /// (`Options::settle`).
+    settle: Option<Settle>,
 }
 
 impl Evaluator {
@@ -723,6 +738,20 @@ impl Evaluator {
             .eval_at(&self.program, extra, tick, self.backend.secrets())
     }
 
+    /// Each provider whose settings `res` makes known, and changed,
+    /// configured ([`Providers::configure_from`]); in a tree, once what
+    /// the settings read of the other deployments is settled
+    /// ([`Settle`]).
+    fn configure(&self, res: &EvalResult) -> Result<Vec<String>> {
+        if let Some(settle) = &self.settle {
+            let upstreams = settings_upstreams(res);
+            if !upstreams.is_empty() {
+                settle(&upstreams)?;
+            }
+        }
+        self.backend.configure_from(agreed(&res.facts))
+    }
+
     /// The program evaluated from the start; each provider whose settings
     /// it makes known configured, and the program evaluated again over
     /// what that serves, as often as that configures another.
@@ -736,7 +765,7 @@ impl Evaluator {
         let (mut res, mut violations, mut resumable) = self.evaluated(&extra)?;
         // A provider the program configures, its settings now known,
         // is configured, and what it serves read again.
-        let mut configured = backend.configure_from(agreed(&res.facts))?;
+        let mut configured = self.configure(&res)?;
         // A kind a CRD the program made defines, served now (R-126).
         let mut learned = self.learn_made_kinds(&res, st)?;
         // Again while that configures another: a provider whose settings
@@ -752,7 +781,7 @@ impl Evaluator {
             externs.forget_not_yet();
             extra = self.extra(st, withheld)?;
             (res, violations, resumable) = self.evaluated(&extra)?;
-            configured = backend.configure_from(agreed(&res.facts))?;
+            configured = self.configure(&res)?;
             learned = false;
         }
         // Each provider reaches the account the program expects of it
@@ -795,7 +824,7 @@ impl Evaluator {
         // known (a kubeconfig read from the server it created) is
         // configured now, and the program evaluated again over what it
         // serves (R-45).
-        let configured = backend.configure_from(agreed(&res.facts))?;
+        let configured = self.configure(&res)?;
         // So is a kind the CRD the last tick made defines (R-126).
         let learned = self.learn_made_kinds(&res, st)?;
         if !configured.is_empty() || learned {
@@ -1480,6 +1509,38 @@ fn forget_retained(plan: &mut provider::Plan, lifecycle: &zset::Lifecycle) {
 /// ..)`: the server).
 fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
     let mut out: BTreeMap<String, BTreeSet<Address>> = BTreeMap::new();
+    settings_rest_on(res, |name, fact| {
+        if let ("attr", [Value::Str(typ), Value::Str(n), ..]) =
+            (fact.pred.as_str(), fact.args.as_slice())
+            && !transform::is_pseudo_type(typ)
+        {
+            out.entry(name.to_string()).or_default().insert(Address {
+                typ: typ.clone(),
+                name: n.clone(),
+            });
+        }
+    });
+    out
+}
+
+/// The other deployments of the tree whose outputs a provider's settings
+/// are made from, as the program names them (`platform[env=lab]`).
+fn settings_upstreams(res: &EvalResult) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    settings_rest_on(res, |_, fact| {
+        if let ("attr", [Value::Str(typ), Value::Str(n), ..]) =
+            (fact.pred.as_str(), fact.args.as_slice())
+            && typ == transform::OUTPUT
+        {
+            out.insert(n.clone());
+        }
+    });
+    out
+}
+
+/// Each fact a `provider_config` row of `res` rests on, with the
+/// program's name of its provider.
+fn settings_rest_on(res: &EvalResult, mut each: impl FnMut(&str, &crate::circuit::Fact)) {
     for a in res.facts.iter().filter(|a| a.pred == "provider_config") {
         let (Some(Term::Val(Value::Str(name))), Some(root)) = (
             a.args.first(),
@@ -1495,15 +1556,7 @@ fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
             }
             match res.circuit.view(id) {
                 View::Fact { fact, alts, .. } => {
-                    if let ("attr", [Value::Str(typ), Value::Str(n), ..]) =
-                        (fact.pred.as_str(), fact.args.as_slice())
-                        && !transform::is_pseudo_type(typ)
-                    {
-                        out.entry(name.clone()).or_default().insert(Address {
-                            typ: typ.clone(),
-                            name: n.clone(),
-                        });
-                    }
+                    each(name, fact);
                     next.extend(alts);
                 }
                 View::Times { children, .. } => next.extend(children),
@@ -1511,7 +1564,6 @@ fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
             }
         }
     }
-    out
 }
 
 /// The CRD among `crds` ([`crds_made`]) that defines `typ`.
@@ -1950,6 +2002,7 @@ impl Located {
             configured: RefCell::new(Vec::new()),
             secret_settings,
             destroy: opts.destroy,
+            settle: opts.settle.clone(),
         };
         Ok((evaluator, waiting))
     }

@@ -99,6 +99,14 @@ impl Plan {
                 .held
                 .outputs(r.outputs_of(&planned.res, st, &report.outputs_after)?);
             cx.cli.held.tally(report.tally());
+            cx.cli.held.waits(
+                report
+                    .pending
+                    .iter()
+                    .filter(|b| !b.deformations.is_empty())
+                    .map(|b| (b.on.join(", "), b.deformations.len()))
+                    .collect(),
+            );
         }
         Ok(report)
     }

@@ -395,6 +395,14 @@ fn reads_of(members: &[Member], d: &Dependency) -> Vec<String> {
         .collect()
 }
 
+/// What a plan holds (`waits`, how many changes by what they wait on):
+/// `1 held, waiting on provider k8s  kubeconfig = platform.kubeconfig`.
+fn held_text(waits: &[(String, usize)]) -> String {
+    let n: usize = waits.iter().map(|(_, n)| n).sum();
+    let on: Vec<&str> = waits.iter().map(|(on, _)| on.as_str()).collect();
+    format!("{n} held, waiting on {}", on.join("; "))
+}
+
 /// The worse of a tree's outcome so far and that of `e`, a deployment's
 /// error: a failure, else the first refusal.
 fn worst(outcome: Outcome, e: &anyhow::Error) -> Outcome {
@@ -639,7 +647,7 @@ impl Tree<'_> {
             }
             Ok(_) => {
                 board.planned(i, held.outputs.take());
-                let state = self.state_of(&mut node, held.tally.as_ref(), *gone, applied);
+                let state = self.state_of(&mut node, &held, *gone, applied);
                 (state, None)
             }
         };
@@ -673,17 +681,18 @@ impl Tree<'_> {
         }
     }
 
-    /// The state line of a deployment planned (`tally`: its headline's
-    /// counts, `None` when it made no plan): its changes, `up to date`
-    /// (`node` then marked unchanged), or its destroy's (`gone`).
+    /// The state line of a deployment planned (`held`: its headline's
+    /// counts, none when it made no plan, and what it holds): its changes,
+    /// `up to date` (`node` then marked unchanged) or what it still holds
+    /// and on what, or its destroy's (`gone`).
     fn state_of(
         &self,
         node: &mut report::deployments::Deployed,
-        tally: Option<&report::Tally>,
+        held: &HeldPlan,
         gone: bool,
         applied: bool,
     ) -> String {
-        let Some(t) = tally else {
+        let Some(t) = &held.tally else {
             return "planned".to_string();
         };
         // Its changes; the policies are the tree's headline's.
@@ -697,10 +706,11 @@ impl Tree<'_> {
             (true, true) => self.removed("nothing is left to destroy"),
             (true, false) => self.removed(&format!("the next apply destroys it, {rest}")),
             (false, _) if !applied => format!("never applied, {rest}"),
-            (false, true) => {
+            (false, true) if held.waits.is_empty() => {
                 node.kind = ActionKind::Noop;
                 "up to date".to_string()
             }
+            (false, true) => format!("up to date but for {}", held_text(&held.waits)),
             (false, false) => rest,
         }
     }

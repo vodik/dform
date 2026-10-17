@@ -121,6 +121,8 @@ struct HeldPlan {
     json: Option<serde_json::Value>,
     /// Its plan file's (`plan --out`), written once for the tree.
     file: Option<zset::file::PlanFile>,
+    /// What its plan holds, by what it waits on: how many changes.
+    waits: Vec<(String, usize)>,
 }
 
 impl Held {
@@ -164,6 +166,12 @@ impl Held {
     /// The plan's outputs, for the plans that read them (R-200).
     fn outputs(&self, outputs: crate::stack::Planned) {
         self.with(|h| h.outputs = Some(outputs));
+    }
+
+    /// What the plan holds, by what it waits on (`waits on provider k8s
+    /// kubeconfig = platform.kubeconfig`): how many changes.
+    fn waits(&self, waits: Vec<(String, usize)>) {
+        self.with(|h| h.waits = waits);
     }
 
     /// The plan's file, for the tree's plan file.

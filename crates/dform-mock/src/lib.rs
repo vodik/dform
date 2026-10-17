@@ -1468,6 +1468,34 @@ fn invalid(e: anyhow::Error) -> CallError {
     CallError::Refused(format!("{e:#}"))
 }
 
+/// In a test of what a provider is configured with
+/// (`DFORM_TEST_RECORD_SETTINGS=FILE`): each Configure that carries the
+/// program's settings appends them to FILE, a JSON line of the deployment
+/// (`stack`) and its `settings`. The native build's only, as its file is
+/// the host's.
+#[cfg(not(target_family = "wasm"))]
+fn record_settings(config: &Json) {
+    use std::io::Write;
+    let (Some(file), Some(settings)) = (
+        std::env::var_os("DFORM_TEST_RECORD_SETTINGS"),
+        config.get("settings"),
+    ) else {
+        return;
+    };
+    let line = json!({ "stack": config.get("stack"), "settings": settings });
+    let appended = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+        .and_then(|mut f| writeln!(f, "{line}"));
+    if let Err(e) = appended {
+        eprintln!("DFORM_TEST_RECORD_SETTINGS: {e}");
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn record_settings(_config: &Json) {}
+
 /// In a test of what runs while a Plan call is in flight
 /// (`DFORM_TEST_FAKE_PLAN_AWAITS=HOST:PORT`): the call first asks that
 /// server for a manifest and is refused unless it answers 200, as a
@@ -1588,6 +1616,7 @@ impl Handler for Mock {
             }
             C::Configure(req) => {
                 let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
+                record_settings(&config);
                 let in_process = self.in_process;
                 let cloud = self.clouds.get_or_set(session, || {
                     Mutex::new(FakeCloud {

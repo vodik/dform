@@ -203,3 +203,76 @@ fn a_readers_call_waits_for_the_call_that_changes_the_secret_it_reads() {
         "{w}"
     );
 }
+
+/// A reader's provider configured from an output its upstream's plan
+/// replaces (the server a kubeconfig names): the reader is never
+/// configured from the old value, so no read goes to a server about to
+/// go. Its rows wait on the provider, provisional, and its plan says
+/// what it holds and on what; once the tick replaces the server the
+/// provider is configured from the new one.
+#[test]
+fn a_provider_configured_from_an_output_its_upstream_replaces_is_never_given_the_old_one() {
+    let s = Scratch::project("tree-tick-stale");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nt = \"providers/t\"\nk8s = \"k8s\"\n",
+    );
+    s.write(
+        "providers/t/schema.df",
+        "type_provider(\"t.server\", \"tcloud\")\n\
+         type_attr(\"t.server\", \"id\", \"string\", [\"computed\", \"id\"])\n\
+         type_mint(\"t.server\", \"id\", \"{hash}\")\n\
+         type_attr(\"t.server\", \"zone\", \"string\", [\"required\", \"force_new\"])\n\
+         type_attr(\"t.server\", \"address\", \"string\", [\"computed\"])\n\
+         type_mint(\"t.server\", \"address\", \"https://{doc:zone}.example\")\n",
+    );
+    let platform = |zone: &str| {
+        format!(
+            "use t\nresource t.server main {{ zone = \"{zone}\" }}\n\
+             output kubeconfig = main.address\n"
+        )
+    };
+    s.write("stacks/platform.df", &platform("a"));
+    s.write(
+        "stacks/apps.df",
+        "use stacks.platform\nuse k8s { kubeconfig = platform.kubeconfig }\n\
+         resource k8s.namespace apps { metadata.name = \"apps\" }\noutput ns = \"apps\"\n",
+    );
+    let recorded = s.path("settings.jsonl");
+    let run = |args: &[&str]| {
+        let out = common::dform()
+            .args(args)
+            .current_dir(&s.dir)
+            .env("NO_COLOR", "1")
+            .env("DFORM_TEST_RECORD_SETTINGS", &recorded)
+            .output()
+            .unwrap();
+        common::Run::from(out).success()
+    };
+    run(&["apply", "apps", "--yes"]);
+    s.write("stacks/platform.df", &platform("b"));
+    std::fs::remove_file(&recorded).unwrap();
+    let r = run(&["plan", "apps"]);
+    assert!(
+        r.stdout.contains(
+            "~ stacks.apps      stacks/apps.df  up to date but for 1 held, waiting on provider \
+             k8s  kubeconfig = platform.kubeconfig\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    run(&["apply", "apps", "--yes"]);
+    let kubeconfigs: Vec<String> = s
+        .read("settings.jsonl")
+        .lines()
+        .map(|l| serde_json::from_str::<Json>(l).unwrap())
+        .filter(|l| l["stack"] == "apps")
+        .map(|l| {
+            l["settings"]["kubeconfig"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(kubeconfigs, ["https://b.example"], "the new server's alone");
+}
