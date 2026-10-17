@@ -77,27 +77,44 @@ impl Surface<'_, '_> {
             {
                 continue;
             }
-            if let (Some(site), Some(v)) = (self.site_of(c, l, depth + 1), v) {
-                let r = rank_of(f);
-                w.lost.push(Step {
-                    expr: match f.args.get(3) {
-                        Some(whole) => crate::report::surface_in(
-                            self.p.redact,
-                            whole,
-                            focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
-                            &v,
-                        ),
-                        None => self.p.redact.surface(&v),
-                    },
-                    at: place(&site),
-                    with: Vec::new(),
-                    rank: (r != Rank::Normal).then(|| r.name().to_string()),
-                    lost: true,
-                });
+            if let Some(v) = v
+                && let Some(step) = self.lost_step(c, l, f, &v, focus, depth)
+            {
+                w.lost.push(step);
             }
         }
         let rank = (top != Rank::Normal).then_some(top.name());
         self.value_chain(c, win, focus, rank, depth, w);
+    }
+
+    /// The step of contribution `l` (fact `f`) the winner beat: `v`, the
+    /// part of its value asked about, as its statement wrote it, and where.
+    fn lost_step(
+        &mut self,
+        c: &mut Compress,
+        l: NodeId,
+        f: &Fact,
+        v: &Value,
+        focus: Option<&Focus>,
+        depth: usize,
+    ) -> Option<Step> {
+        let site = self.site_of(c, l, depth + 1)?;
+        let r = rank_of(f);
+        Some(Step {
+            expr: match f.args.get(3) {
+                Some(whole) => crate::report::surface_in(
+                    self.p.redact,
+                    whole,
+                    focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                    v,
+                ),
+                None => self.p.redact.surface(v),
+            },
+            at: place(&site),
+            with: Vec::new(),
+            rank: (r != Rank::Normal).then(|| r.name().to_string()),
+            lost: true,
+        })
     }
 
     /// [`value_site`], each step kept: the expression that wrote fact `id`,
