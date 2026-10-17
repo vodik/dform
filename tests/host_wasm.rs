@@ -578,7 +578,7 @@ fn the_k8s_component_traces_as_its_native_build_does() {
     // A Plan's apply is a dry run, and says so.
     assert!(
         native.keys().any(|(c, r)| c.starts_with("plan ")
-            && r.starts_with("k8s PATCH https://")
+            && r.starts_with("k8s PATCH http")
             && r.ends_with(" (dry run)")),
         "{native:#?}"
     );
