@@ -340,6 +340,7 @@ fn fetch(url: &str) -> Result<String> {
 }
 
 /// How long a JWKS fetch may take.
+#[cfg(not(target_family = "wasm"))]
 const JWKS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 fn cached_fetch(url: &str, cache_dir: &Path) -> Result<String> {

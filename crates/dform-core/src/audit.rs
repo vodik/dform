@@ -421,7 +421,7 @@ fn send(cmd: &str, line: &str, budget: Duration) -> Result<()> {
 }
 
 /// A sink's process group, by its leader's pid.
-struct Group(u32);
+struct Group(#[cfg_attr(not(unix), allow(dead_code))] u32);
 
 impl Group {
     /// SIGKILL to every process of the group.

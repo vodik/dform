@@ -19,7 +19,9 @@
 //! yet", as a tag the registry does not have yet is.
 
 use crate::ast::ExternFn;
-use crate::plugin::host::{Class, Error, Failure, HttpRequest};
+use crate::plugin::host::{Error, Failure};
+#[cfg(not(target_family = "wasm"))]
+use crate::plugin::host::{Class, HttpRequest};
 use crate::value::{OciRef, Value};
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
@@ -29,6 +31,7 @@ pub const RESOLVE: &str = "oci.resolve";
 
 /// What a manifest is asked for as: an index (a multi-platform image)
 /// first, then a single image's manifest, OCI's and Docker's.
+#[cfg(not(target_family = "wasm"))]
 const ACCEPT: &str = "application/vnd.oci.image.index.v1+json, \
      application/vnd.docker.distribution.manifest.list.v2+json, \
      application/vnd.oci.image.manifest.v1+json, \
@@ -196,6 +199,7 @@ impl Drop for Resolved {
 
 /// The registry's host as its API is reached: Docker Hub's for the
 /// default registry.
+#[cfg(not(target_family = "wasm"))]
 fn api_host(r: &OciRef) -> String {
     match r.registry.as_deref() {
         None => "registry-1.docker.io".to_string(),
@@ -205,6 +209,7 @@ fn api_host(r: &OciRef) -> String {
 
 /// Whether `host` (`localhost:5000`) is the machine's own, spoken to in
 /// the clear.
+#[cfg(not(target_family = "wasm"))]
 fn loopback(host: &str) -> bool {
     let name = match host.strip_prefix('[') {
         Some(v6) => v6.split(']').next().unwrap_or_default(),
@@ -460,6 +465,7 @@ fn token(
 }
 
 /// `realm="https://ghcr.io/token",service="ghcr.io",scope="repository:o/r:pull"`.
+#[cfg(not(target_family = "wasm"))]
 fn challenge_params(s: &str) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
     let mut rest = s.trim();
@@ -479,6 +485,7 @@ fn challenge_params(s: &str) -> std::collections::BTreeMap<String, String> {
     out
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers
         .iter()
