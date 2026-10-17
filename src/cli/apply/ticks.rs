@@ -7,7 +7,7 @@ pub(super) use calls::{ActionLog, Calls, failed_of};
 
 use super::approvals::{Approvals, Asked};
 use super::prompt::{Stopped, confirm, confirm_emptied, declined};
-use super::{Apply, Next, Wanted};
+use super::{Apply, First, Next, Start, Step, Wanted};
 use crate::ast::Term;
 use crate::cli::evaluated::Context;
 use crate::cli::outputs::{readers_of, sealed_label};
@@ -250,7 +250,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     }
 
     /// Chaos names only resources of this stack.
-    pub(super) fn check_chaos(&self, resources: &[resources::Resource]) -> Result<()> {
+    fn check_chaos(&self, resources: &[resources::Resource]) -> Result<()> {
         for addr in self.cx.chaos.addresses() {
             if !resources.iter().any(|r| &r.addr == addr) && self.st.get(addr).is_none() {
                 bail!(
@@ -293,12 +293,27 @@ impl<'a, 'h> Ticks<'a, 'h> {
         }
     }
 
+    /// The ticks begun from `s`: chaos checked against tick 1's plan, the
+    /// lease taken, what `moved/3` did said, and what an interrupted apply
+    /// left resumed. What tick 1 is planned from.
+    pub(super) fn start(&mut self, s: Start) -> Result<Step> {
+        self.check_chaos(&s.first.planned.resources)?;
+        self.begin()?;
+        if !s.moves.is_empty() {
+            self.say(Said::Moved(report::moved_text(&s.moves)));
+        }
+        self.resume(&s.violations)?;
+        // The providers the plan's own evaluation configured.
+        self.evaluator.take_configured();
+        Ok(Step::First(Box::new(s.first)))
+    }
+
     /// The apply's start: its lock taken, the controller's memos flushed
     /// under the lease again, the memos the plan read kept in state.
     /// Nothing is written, to state or the world, until the apply is
     /// confirmed: the moves, the resolution of uncertain calls and the
     /// in-flight record taken here are written with the tick's first.
-    pub(super) fn begin(&mut self) -> Result<()> {
+    fn begin(&mut self) -> Result<()> {
         // One apply at a time per deployment; the lock is held until the
         // apply's end is in the audit log.
         *self.session = Some(Session {
@@ -330,7 +345,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// come back as facts with the documents they were planned against, as
     /// the held ones do at a boundary: the evaluator derives the deny when
     /// the world moved under one (`zset::POLICY_RULES`).
-    pub(super) fn resume(&mut self, violations: &[String]) -> Result<()> {
+    fn resume(&mut self, violations: &[String]) -> Result<()> {
         self.resumed = self.st.in_flight.take();
         self.r.resuming.set(self.resumed.is_some());
         let Some(f) = &self.resumed else {
@@ -389,10 +404,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
         skip_all,
         fields(otel.name = %format_args!("tick {}", self.tick), tick = self.tick)
     )]
-    pub(super) fn tick(&mut self, wanted: Wanted) -> Result<Next> {
+    pub(super) fn tick(&mut self, step: Step) -> Result<Next> {
         // Between ticks, a signal stops the apply here.
         crate::interrupt::check()?;
-        let mut p = self.plan(wanted)?;
+        let mut p = self.plan(step)?;
         if let Some(o) = self.show(&p.tick)? {
             return Ok(Next::Done(o));
         }
@@ -405,27 +420,45 @@ impl<'a, 'h> Ticks<'a, 'h> {
         self.after(p, ran, waits)
     }
 
-    /// The tick planned from what the last boundary derived (`wanted`):
-    /// its plan, checked against a plan file at tick 1, and what it needs,
-    /// holds and is followed by.
-    pub(super) fn plan(&mut self, wanted: Wanted) -> Result<TickPlan> {
-        let Wanted {
-            res,
-            violations,
-            resources,
-            adopts,
-            lifecycle,
-        } = wanted;
-        let planned =
-            self.evaluator
-                .plan(res, &violations, resources, &adopts, &lifecycle, &self.st)?;
+    /// The tick planned from `step`: tick 1's plan, else what the last
+    /// boundary derived; checked against a plan file at tick 1, and what
+    /// it needs, holds and is followed by.
+    pub(super) fn plan(&mut self, step: Step) -> Result<TickPlan> {
+        let (planned, adopts, lifecycle) = match step {
+            Step::First(f) => {
+                let First {
+                    planned,
+                    adopts,
+                    lifecycle,
+                } = *f;
+                (planned, adopts, lifecycle)
+            }
+            Step::Wanted(w) => {
+                let Wanted {
+                    res,
+                    violations,
+                    resources,
+                    adopts,
+                    lifecycle,
+                } = *w;
+                let planned = self.evaluator.plan(
+                    res,
+                    &violations,
+                    resources,
+                    &adopts,
+                    &lifecycle,
+                    &self.st,
+                )?;
+                (planned, adopts, lifecycle)
+            }
+        };
         self.planned(planned, adopts, lifecycle)
     }
 
     /// The tick's plan `planned` (made from the adoptions `adopts` and
     /// `lifecycle`): checked against a plan file at tick 1, and what it
     /// needs, holds and is followed by.
-    pub(super) fn planned(
+    fn planned(
         &mut self,
         planned: Planned,
         adopts: Vec<resources::Adopt>,

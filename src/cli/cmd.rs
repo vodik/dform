@@ -253,9 +253,10 @@ impl Cmd {
             && !self.reveals()
     }
 
-    /// Whether the run makes the plan's policy pass.
+    /// Whether the run makes the plan and its policy pass: a plan prints
+    /// it, an apply's tick 1 is it, query and why read it.
     pub(super) fn policy(&self) -> bool {
-        (self.explains() && !matches!(self, Cmd::Secrets(_))) || matches!(self, Cmd::Plan(_))
+        (self.explains() && !matches!(self, Cmd::Secrets(_))) || self.plans()
     }
 
     /// The violations that refuse a run, printed as every error is

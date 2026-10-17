@@ -58,6 +58,37 @@ struct Wanted {
     lifecycle: zset::Lifecycle,
 }
 
+/// Tick 1's plan: the deployment's evaluation's own, the one `plan`
+/// prints, and the adoptions and the lifecycle its calls are made with.
+struct First {
+    planned: deployment::Planned,
+    adopts: Vec<resources::Adopt>,
+    lifecycle: zset::Lifecycle,
+}
+
+impl First {
+    /// The plan of the evaluation (`policy`, of the resources `compiled`).
+    fn of(
+        policy: Option<Result<deployment::Planned>>,
+        compiled: deployment::Compiled,
+    ) -> Result<First> {
+        let planned =
+            policy.ok_or_else(|| anyhow::anyhow!("internal: an apply without its plan"))??;
+        Ok(First {
+            planned,
+            adopts: compiled.adopts,
+            lifecycle: compiled.lifecycle,
+        })
+    }
+}
+
+/// What a tick is planned from: tick 1's plan, else what the last
+/// boundary derived.
+enum Step {
+    First(Box<First>),
+    Wanted(Box<Wanted>),
+}
+
 /// What a tick ends in: the next tick, from what the boundary derived, or
 /// the apply's end.
 enum Next {
@@ -84,9 +115,11 @@ impl Apply {
         }
     }
 
-    /// The apply: one apply at a time per deployment, the lock held until
-    /// its end is in the audit log (`session`); what an interrupted apply
-    /// left resumed; then ticks until the plan holds nothing.
+    /// The apply: its plan the evaluation's (`plan`'s); in a tree's run,
+    /// handed to the tree ([`tree::Handover`]), else applied: one apply at
+    /// a time per deployment, the lock held until its end is in the audit
+    /// log (`session`); what an interrupted apply left resumed; then ticks
+    /// until the plan holds nothing.
     pub(super) fn run(
         &self,
         run: Evaluated,
@@ -98,33 +131,33 @@ impl Apply {
             located,
             st,
             moves,
-            res,
             violations,
             evaluator,
+            policy,
             ..
         } = ev;
+        let first = First::of(policy, compiled)?;
+        let start = Start {
+            moves,
+            violations,
+            first,
+        };
         let r = Reporter::new(&cx, &evaluator, &located, &st);
         let mut ticks = Ticks::new(self, &cx, &r, &evaluator, &located, hook, session, st)?;
-        ticks.check_chaos(&compiled.resources)?;
-        ticks.begin()?;
-        if !moves.is_empty() {
-            ticks.say(crate::said::Said::Moved(report::moved_text(&moves)));
-        }
-        ticks.resume(&violations)?;
-        let mut wanted = Wanted {
-            res,
-            violations,
-            resources: compiled.resources,
-            adopts: compiled.adopts,
-            lifecycle: compiled.lifecycle,
-        };
-        // The providers the plan's own evaluation configured.
-        evaluator.take_configured();
+        let mut step = ticks.start(start)?;
         loop {
-            match ticks.tick(wanted)? {
-                Next::Tick(w) => wanted = *w,
+            match ticks.tick(step)? {
+                Next::Tick(w) => step = Step::Wanted(w),
                 Next::Done(outcome) => return Ok(outcome),
             }
         }
     }
+}
+
+/// What a deployment's ticks start from ([`Ticks::start`]): the moves
+/// `moved/3` made, its violations, and tick 1's plan.
+struct Start {
+    moves: Vec<(crate::address::Address, crate::address::Address)>,
+    violations: Vec<String>,
+    first: First,
 }
