@@ -106,6 +106,67 @@ fn independent_deployments_calls_overlap_and_each_lands_in_its_world() {
     }
 }
 
+/// A tick's deployments that read nothing of each other are planned at
+/// once, each on its own thread: two readers of net's vpc, known after
+/// net's tick 1, plan their subnets at tick 2, each Plan call waiting
+/// 1.5 s on a server and each to a process of its own (two's provider is
+/// the mock at a path); the two are in flight together.
+#[test]
+fn a_ticks_deployments_are_planned_at_once() {
+    let s = Scratch::project("tree-tick-plans");
+    s.write(
+        "dform.toml",
+        &format!(
+            "[project]\nedition = \"2026\"\n\n[providers]\nt = {{ path = \"{}\" }}\n",
+            common::exe("dform-provider-fake")
+        ),
+    );
+    s.write(
+        "stacks/net.df",
+        "use fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\noutput vpc = ref(main)\n",
+    );
+    for (stack, provider) in [("one", "fake"), ("two", "t")] {
+        s.write(
+            &format!("stacks/{stack}.df"),
+            &format!(
+                "use {provider}\nuse stacks.net as network\n\
+                 resource net.subnet a {{ cidr = \"10.0.1.0/24\", name = network.vpc }}\n"
+            ),
+        );
+    }
+    let slow = std::time::Duration::from_millis(1500);
+    let at = format!("127.0.0.1:{}", common::answering_after(slow, slow));
+    let out = common::dform()
+        .args(["apply", "--yes", "--trace", "trace.jsonl"])
+        .current_dir(&s.dir)
+        .env("NO_COLOR", "1")
+        .env("DFORM_TEST_FAKE_PLAN_AWAITS", &at)
+        .env_remove("DFORM_TRACE")
+        .output()
+        .unwrap();
+    common::Run::from(out).success();
+    let spans = common::spans(&s.path("trace.jsonl"));
+    let ns = |x: &Json, k: &str| x[k].as_str().unwrap().parse::<u128>().unwrap();
+    let tick = spans
+        .iter()
+        .find(|x| x["name"] == "tick 2")
+        .expect("a tick 2");
+    let mut ids = vec![tick["spanId"].clone()];
+    let mut plans = Vec::new();
+    while let Some(id) = ids.pop() {
+        for x in spans.iter().filter(|x| x["parentSpanId"] == id) {
+            ids.push(x["spanId"].clone());
+            if x["name"] == "plan net.subnet a" {
+                plans.push((ns(x, "startTimeUnixNano"), ns(x, "endTimeUnixNano")));
+            }
+        }
+    }
+    let [(a0, a1), (b0, b1)] = plans[..] else {
+        panic!("a subnet's Plan call each at tick 2: {plans:?}");
+    };
+    assert!(a0 < b1 && b0 < a1, "planned one after the other: {plans:?}");
+}
+
 /// The provider dies under the tree's tick (chaos `crash`): each
 /// deployment's in-flight record holds its own creates whose answers were
 /// lost, uncertain with their idempotency keys, and every object each

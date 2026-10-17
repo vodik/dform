@@ -2542,7 +2542,9 @@ and what paces a provider is the window of its requests the host keeps by
 what the server answers (see the providers section). `--parallel 1` makes
 one call at a time, in plan order: the serial escape, and the setting for a
 first apply against a new provider, whose throttles and failures then come
-one at a time. A tree's apply walks every deployment's tick at once under one window:
+one at a time. A tree's apply plans each tick's deployments at once,
+those that read nothing of each other together and a reader once those
+it reads have planned theirs, and walks every deployment's tick at once under one window:
 N calls in flight across its deployments, and at `--parallel 1` one at
 a time, each deployment's in plan order. The plan's output does not change with N; the calls
 answer in the provider's order. The calls in flight run at once, and each is put on

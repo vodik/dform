@@ -14,8 +14,9 @@
 //! does there what the tree's thread asks of it ([`member`]).
 //!
 //! Every lease is taken before the first call. Each tick plans every
-//! deployment still changing, in apply order, a reader's wait on an
-//! output its upstream knows only after a tick scheduled the tick after;
+//! deployment still changing, each on its thread, those that read
+//! nothing of each other at once, a reader's wait on an output its
+//! upstream knows only after a tick scheduled the tick after;
 //! tick 1's plan of the tree is shown and confirmed once. A tick's calls
 //! are the tree's: every deployment's part is walked at once, each on its
 //! thread (`executor::run_tick`), under one window (`executor::Together`),
@@ -265,17 +266,58 @@ impl Tree<'_> {
         Ok(None)
     }
 
-    /// Each active member's plan of this tick, in apply order: a reader's
-    /// waits on an output its upstream knows only after a tick are
-    /// scheduled by the upstream's plan of it.
+    /// Each active member's plan of this tick, on its own thread, once
+    /// those it reads have planned theirs: a reader's waits on an output
+    /// its upstream knows only after a tick are scheduled by the
+    /// upstream's plan of it ([`Tree::told`]). Members that read nothing
+    /// of each other's are planned at once, a wave of the tree's
+    /// dependencies at a time.
     fn plan(&mut self, active: &[usize]) -> Result<()> {
-        for &i in active {
-            self.enter(i);
-            let after = Arc::new(self.members[i].ask(|s| s.plan_tick())??);
-            for j in self.readers(i) {
-                let (full, after) = (self.members[i].seated.stored.clone(), after.clone());
-                self.members[j].ask(move |s| s.outside_of(&full, &after))?;
+        let mut left: Vec<usize> = active.to_vec();
+        while !left.is_empty() {
+            let (wave, rest): (Vec<usize>, Vec<usize>) = left
+                .iter()
+                .partition(|&&j| !left.iter().any(|&i| self.readers(i).contains(&j)));
+            if wave.is_empty() {
+                bail!("internal: the tree's deployments read each other in a cycle");
             }
+            let mut planning = Vec::new();
+            for &i in &wave {
+                self.enter(i);
+                planning.push((i, self.members[i].post(|s| s.plan_tick())?));
+            }
+            let mut failure = None;
+            for (i, planned) in planning {
+                let after = planned
+                    .recv()
+                    .map_err(|_| {
+                        anyhow::anyhow!("internal: {}'s thread ended", self.members[i].d.full)
+                    })
+                    .and_then(|r| r);
+                match after {
+                    Ok(after) if failure.is_none() => self.told(i, after)?,
+                    Ok(_) => {}
+                    Err(e) => {
+                        failure.get_or_insert((i, e));
+                    }
+                }
+            }
+            if let Some((i, e)) = failure {
+                self.at = Some(i);
+                return Err(e);
+            }
+            left = rest;
+        }
+        Ok(())
+    }
+
+    /// Member `i`'s plan of this tick, its outputs known only after a tick
+    /// (`after`), told to the members that read it.
+    fn told(&mut self, i: usize, after: BTreeMap<String, usize>) -> Result<()> {
+        let after = Arc::new(after);
+        for j in self.readers(i) {
+            let (full, after) = (self.members[i].seated.stored.clone(), after.clone());
+            self.members[j].ask(move |s| s.outside_of(&full, &after))?;
         }
         Ok(())
     }
