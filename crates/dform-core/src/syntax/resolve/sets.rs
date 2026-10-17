@@ -113,10 +113,15 @@ impl Lowerer<'_> {
         Ok(match block {
             Some(block) => {
                 let fields = self.wanting(Want::Schema, |l| l.fields(rc, block))?;
-                let (fields, ends): (Vec<_>, Vec<_>) = fields
+                let spread = self.block_spread(rc, block, &fields)?;
+                let (mut fields, mut ends): (Vec<_>, Vec<_>) = fields
                     .into_iter()
                     .map(|(f, id, end)| ((f, id), end))
                     .unzip();
+                if let Some(s) = spread {
+                    fields.push(s);
+                    ends.push(self.helpers.len());
+                }
                 (fields, ends, None)
             }
             None => {

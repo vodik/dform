@@ -216,3 +216,67 @@ fn a_spread_of_what_it_writes_is_the_cycle_with_its_fix() {
         r.stderr
     );
 }
+
+/// A resource's block takes a spread as an object does (the user's
+/// project, 2026-10-16, edge 4: a whole resource made by a function
+/// could not be a block): `..base(name)` gives the keys the block does
+/// not write, and an entry after it is the block's, `spec.replicas = 2`
+/// over base's 1, the rest of `spec` base's. On the k8s mock, in a
+/// component's body.
+#[test]
+fn a_resource_block_takes_a_spread_its_own_entries_winning() {
+    let s = Scratch::project("spread-block");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
+    );
+    s.write(
+        "main.df",
+        r#"use k8s
+
+let base(name) = {
+  metadata = { name = name, labels = { app = name } },
+  spec = {
+    replicas = 1,
+    selector = { matchLabels = { app = name } },
+    template = { spec = { containers = [{ name = name, image = "${name}:1" }] } },
+  },
+}
+
+component app {
+  input name: string
+  resource k8s.deployment d { ..base(name), spec.replicas = 2 }
+}
+
+resource app web { name = "web" }
+"#,
+    );
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "-vv", "main.df"])
+        .success();
+    for line in [
+        "        metadata.name = \"web\"\n",
+        "        spec.replicas = 2\n",
+        "        spec.selector.matchLabels.app = \"web\"\n",
+        "        spec.template.spec.containers[name=web].image = \"web:1\"\n",
+    ] {
+        assert!(r.stdout.contains(line), "{line}---\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("spec.replicas = 1"), "{}", r.stdout);
+}
+
+/// A key written before the spread would be replaced by it as an
+/// object's is: the error, which names the key and the spread.
+#[test]
+fn an_entry_before_a_blocks_spread_is_the_error() {
+    let e = error(
+        "use fake\nlet base = { cidr = \"10.0.0.0/16\" }\nresource net.vpc v { cidr = \"x\", ..base }\n",
+    );
+    assert!(
+        e.contains(
+            "`cidr` is written before `..base`: a spread gives the keys the block does not write, \
+             so it leads the block"
+        ) && e.contains("help: write `..base` first, then the block's own entries"),
+        "{e}"
+    );
+}

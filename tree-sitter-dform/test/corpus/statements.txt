@@ -1323,6 +1323,32 @@ let init(token: secret?(string), host) = token
     (identifier)))
 
 ================================================================================
+A resource's block takes a spread
+================================================================================
+
+resource k8s.deployment d { ..base(name), spec.replicas = 2 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (resource
+    type: (dotted_name
+      (identifier)
+      (identifier))
+    name: (identifier)
+    body: (block
+      (spread
+        value: (call
+          function: (identifier)
+          arguments: (arguments
+            (identifier))))
+      (field
+        path: (block_path
+          (identifier)
+          (identifier))
+        value: (integer)))))
+
+================================================================================
 A write of a whole subtree
 ================================================================================
 

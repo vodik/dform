@@ -272,6 +272,11 @@ pub const CONCAT: &str = "__concat";
 /// the keys the pattern names (lowering.df).
 pub const REST: &str = "__rest";
 
+/// `resource T n { ..base, tags.team = t }` (R-199 in a block): the
+/// spreads' object without the value at each stored path the block
+/// writes (lowering.df).
+pub const WITHOUT: &str = "__without";
+
 pub const FORMS: &[&str] = &["ref", "cloud_ref"];
 
 /// Whether a program may call `name`: declared and not internal, or one
@@ -354,6 +359,21 @@ pub fn is_function_name(name: &str) -> bool {
         || name
             .split_once('.')
             .is_some_and(|(head, _)| registry().is_package(head))
+}
+
+/// `m` without the value at the keys `path`, where it has one.
+fn without(m: &mut BTreeMap<String, Value>, path: &[String]) {
+    match path {
+        [] => {}
+        [k] => {
+            m.remove(k);
+        }
+        [k, rest @ ..] => {
+            if let Some(Value::Obj(inner)) = m.get_mut(k) {
+                without(inner, rest);
+            }
+        }
+    }
 }
 
 /// What a program writes for a function std no longer has (R-133,
@@ -1157,6 +1177,16 @@ pub const BODIES: &[(&str, Body)] = &[
             }
         }
         Some(Value::List(out))
+    }),
+    (WITHOUT, |a| match a {
+        [Value::Obj(m), paths @ ..] => {
+            let mut m = m.clone();
+            for p in paths {
+                without(&mut m, &crate::address::path_keys(p.as_str()?));
+            }
+            Some(Value::Obj(m))
+        }
+        _ => None,
     }),
     (REST, |a| match a {
         [n @ Value::Null { .. }, ..] => Some(n.clone()),

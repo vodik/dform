@@ -276,6 +276,23 @@ impl Lowerer<'_> {
         self.copy(n, scope, outer, (CopyKind::Component, module, name, via))
     }
 
+    /// A spread in the block of a copy of `component`: the error, a copy
+    /// taking each input by its name.
+    fn no_spread(&mut self, block: &SyntaxNode, component: &str) -> L<()> {
+        let Some(s) = block.children().find(|c| c.kind() == SPREAD) else {
+            return Ok(());
+        };
+        self.error_help(
+            self.span(&s),
+            format!(
+                "`{}` in a copy of component {component}: a spread gives a provider type's \
+                 attributes",
+                s.text()
+            ),
+            "a copy takes each input by its name, `NAME = ..`".to_string(),
+        )
+    }
+
     /// The module instance the component `component`, written `written`
     /// in `scope`, is named through (R-186): `a.volume` under `use backups
     /// as a`, the component an item of that module; by its path,
@@ -348,7 +365,10 @@ impl Lowerer<'_> {
         };
         let made = self.helpers.len();
         let fields = match node(n, BLOCK) {
-            Some(block) => self.fields(&mut rc, &block)?,
+            Some(block) => {
+                self.no_spread(&block, &module)?;
+                self.fields(&mut rc, &block)?
+            }
             None => Vec::new(),
         };
         let inputs = self.copy_inputs(fields, made)?;

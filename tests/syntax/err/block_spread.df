@@ -1,0 +1,7 @@
+use fake
+let base = { cidr = "10.0.0.0/16" }
+resource net.vpc v { cidr = "x", ..base }
+component c {
+  input a: int
+}
+resource c k { ..{ a = 1 } }

@@ -388,6 +388,20 @@ export default grammar({
 
     _copy_entry: $ => choice($.field, $.rule, $.fact, alias($.rows_from, $.input_relation)),
 
+    // A resource's block: a `use`'s entries, and spreads, `..x` (R-199),
+    // which give the keys its entries do not write.
+    resource_block: $ => seq(
+      '{',
+      repeat($._newline),
+      optional(choice(
+        seq(repeat(seq($._resource_entry, $._separator)), $._resource_entry),
+        repeat1(seq($._resource_entry, $._separator)),
+      )),
+      '}',
+    ),
+
+    _resource_entry: $ => choice($._copy_entry, $.spread),
+
     rows_from: $ => seq(
       field('name', $._word),
       'from',
@@ -414,7 +428,7 @@ export default grammar({
       // says. `= VALUE`: the body is a value of the type, a document
       // (R-126).
       choice(
-        field('body', alias($.copy_block, $.block)),
+        field('body', alias($.resource_block, $.block)),
         seq('=', field('value', $._term)),
       ),
       optional(seq(optional($._hang), $.clause)),

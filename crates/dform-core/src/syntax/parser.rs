@@ -1138,8 +1138,8 @@ impl<'a> Parser<'a> {
         }
         // A copy of a component takes the rows of the relations
         // it takes (R-55, R-113); a provider's type, which the
-        // resolver says, none.
-        p.block_of(true)?;
+        // resolver says, none; a spread `..x` its attributes.
+        p.block_of(true, true)?;
         p.opt_clause()
     }
 
@@ -1399,8 +1399,9 @@ impl<'a> Parser<'a> {
     /// `{ entry* }` of a resource or a `use`: entries
     /// separated by a newline or a comma, its clause after it; with `rows`
     /// also the rows of the relations a module or a component takes
-    /// (R-55): `p(t, ..) [where B]`, or `p from TERM [where B]`.
-    fn block_of(&mut self, rows: bool) -> P {
+    /// (R-55): `p(t, ..) [where B]`, or `p from TERM [where B]`; with
+    /// `spread` a spread `..term`, a resource's (R-199).
+    fn block_of(&mut self, rows: bool, spread: bool) -> P {
         self.start(BLOCK);
         let open = self.nth_index(0);
         self.expect(L_BRACE)?;
@@ -1431,7 +1432,20 @@ impl<'a> Parser<'a> {
                 if let Some(i) = p.nth_index(0) {
                     p.head_col = p.column(p.toks[i].start);
                 }
-                if rows && p.at_head() {
+                if p.at(DOT2) && spread {
+                    p.spread()?;
+                } else if p.at(DOT2) {
+                    let msg = format!("expected an entry or `}}`, found {}", p.found());
+                    p.error_here(
+                        msg,
+                        Some(
+                            "a spread gives a resource's attributes, `resource T n { ..x }`; a \
+                             `use` takes each input by its name"
+                                .to_string(),
+                        ),
+                    );
+                    return Err(Bail);
+                } else if rows && p.at_head() {
                     p.rule()?;
                 } else if rows
                     && p.nth(0).is_word()
@@ -1460,7 +1474,7 @@ impl<'a> Parser<'a> {
     /// A `use` block, which may hold rows (R-55).
     fn opt_copy_block(&mut self) -> P {
         if self.at(L_BRACE) {
-            self.block_of(true)
+            self.block_of(true, false)
         } else {
             Ok(())
         }

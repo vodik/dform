@@ -114,3 +114,7 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
 let greeting(name: secret?(string), punct = "!") = "hello ${name}${punct}"
 
 greeted(g) where g = greeting("x")
+
+let vpc_base = { cidr = "10.0.0.0/16", tags = { team = "net" } }
+
+resource net.vpc spread { ..vpc_base, tags.team = "core" }

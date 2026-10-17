@@ -945,7 +945,7 @@ selector   := ("." SEG | "[" "*" "]")+                ; a path into a document
 use        := "use" path ("as" NAME)? cblock? ("where" body)?
 component  := "component" NAME (":" type)? stmts   ; an item of a module, of a signature
 path       := NAME ("." NAME)*                    ; a/b.df from the root; std.x; a package mount
-resource   := "resource" DOTTED hname RANK? (cblock | "=" term) ("where" body)?   ; DOTTED a type or a component
+resource   := "resource" DOTTED hname RANK? (rblock | "=" term) ("where" body)?   ; DOTTED a type or a component
 deny, warn := ("deny" | "warn") STRING object? ("where" body)?
 stmts      := "{" (stmt NL)* "}"
 
@@ -955,6 +955,7 @@ flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
 block      := "{" (entry SEP)* "}"
 entry      := blockpath (write term)? RANK?   ; `zone` alone is `zone = zone`
 cblock     := "{" ((entry | row) SEP)* "}"          ; rows only for a module or a component
+rblock     := "{" ((".." term | entry | row) SEP)* "}"   ; a spread a provider's type's alone, before every entry
 row        := NAME "(" args ")" ("where" body)?     ; a row of a relation it takes
             | NAME "from" term ("where" body)?
 blockpath  := SEG ("." SEG | "[" INT "]")*
@@ -2154,6 +2155,20 @@ inside the source is carried, as one inside a literal is). A key one
 literal writes twice is an error naming both. A contribution that
 spreads the attribute it writes, `set r.spec = { ..r.spec, x = 1 }`, makes
 a value from itself: the cycle error, whose help is `set r.spec.x = 1`.
+
+A resource's block is an object of its attributes and takes the same
+spread: `resource k8s.deployment d { ..base(name), spec.replicas = 2 }`
+is base's attributes at normal rank, one contribution per key of the
+object as `resource T n = VALUE`'s, and the block's own entries. The
+spreads lead the block and meet as an object's do, the last winning; a
+path an entry writes with `=` or `:=` is the entry's, taken out of the
+spread (`spec.replicas` from the entry, the rest of `spec` from base),
+as a key written after a spread wins, while a `+=` or an element's
+write meets the spread's value as another writer's. An entry written
+before a spread is an error naming both: it would be the default the
+spread replaces, which a block does not write. A copy of a component
+takes each input by its name, and a `use` block too: a spread there is
+an error.
 
 The same `..` is an object pattern's rest ("Patterns"). It is not
 extended to calls (`f(..xs)`: a function's parameters are named and

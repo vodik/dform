@@ -82,6 +82,79 @@ impl Lowerer<'_> {
         Ok(self.node(self.span(n), ExprKind::Object { parts }))
     }
 
+    /// The spreads of a resource's block, `resource T n { ..base(n),
+    /// replicas = 2 }` (R-199 in a block): one entry at the root, an
+    /// entry per key of the object they make when the rule runs, as
+    /// `resource T n = VALUE`'s (`transform::body_entries`). The spreads
+    /// lead the block and merge as an object literal's do, the last
+    /// winning; a path the block writes with `=` or `:=` is the block's,
+    /// taken out of them (`__without`), so its entry wins as a later
+    /// key does; a `+=` or an element's write meets theirs as another
+    /// writer's. An entry written before a spread is the error.
+    pub(super) fn block_spread(
+        &mut self,
+        rc: &mut Rc,
+        block: &SyntaxNode,
+        written: &[(FieldAssign, ExprId, usize)],
+    ) -> L<Option<(FieldAssign, ExprId)>> {
+        let spreads: Vec<SyntaxNode> = block.children().filter(|c| c.kind() == SPREAD).collect();
+        let Some(last) = spreads.last() else {
+            return Ok(None);
+        };
+        let before = block
+            .children()
+            .take_while(|c| c != last)
+            .find(|c| c.kind() == ASSIGN);
+        if let Some(a) = before {
+            let key = node(&a, BLOCK_PATH)
+                .map(|p| p.text().to_string())
+                .unwrap_or_default();
+            let spread = last.text().to_string();
+            return self.error_help(
+                self.span(&a),
+                format!(
+                    "`{key}` is written before `{spread}`: a spread gives the keys the block \
+                     does not write, so it leads the block"
+                ),
+                format!("write `{spread}` first, then the block's own entries"),
+            );
+        }
+        let mut parts = Vec::new();
+        for s in &spreads {
+            let id = self.spread_source(rc, s, Target::Object)?;
+            parts.push(self.object_part(id));
+        }
+        let span = Span {
+            end: self.span(last).end,
+            ..self.span(&spreads[0])
+        };
+        let parts = self.unfolded(
+            folded(parts),
+            span,
+            |parts| ExprKind::Object { parts },
+            ObjPart::Spread,
+        );
+        let mut value = self.node(span, ExprKind::Object { parts });
+        let taken: Vec<&str> = written
+            .iter()
+            .filter(|(f, ..)| f.op != FieldOp::Add && !f.key.contains('['))
+            .map(|(f, ..)| f.key.as_str())
+            .collect();
+        if !taken.is_empty() {
+            let mut args = vec![value];
+            args.extend(taken.iter().map(|p| self.str_node(span, p)));
+            value = self.building(rc, span, |b| b.form(crate::functions::WITHOUT, args));
+        }
+        let f = FieldAssign {
+            key: String::new(),
+            op: FieldOp::Assign,
+            value: self.term_of(value),
+            rank: None,
+            span,
+        };
+        Ok(Some((f, value)))
+    }
+
     /// `[a, ..xs, b]`: the parts in order, folded where each is written (a
     /// written list spread is its elements, a known range its members).
     pub(super) fn list(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {

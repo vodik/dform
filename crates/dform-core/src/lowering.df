@@ -106,6 +106,10 @@ internal fn __concat(part: any, ...) -> any forwards, forwards nulls
 #| example: __rest(Obj, "metadata")
 internal fn __rest(value: any, key: string, ...) -> any? forwards, forwards nulls
 
+#| An object without the value at each stored path given (R-199 in a block): the spreads of `resource T n { ..base, tags.team = t }` lower to it, less what the block's entries write; no value for a value that is not an object.
+#| example: __without(Base, "tags.team")
+internal fn __without(value: any, path: string, ...) -> any? forwards, forwards nulls
+
 #| A range, `start..end` (`inclusive`: `start..=end`), of one ordered type (R-180); no value for ends of two types or of a type with no order. A range literal whose ends are computed lowers to it.
 #| example: __range(0, N, true)
 internal fn __range(start: any, end: any, inclusive: bool) -> any? forwards nulls

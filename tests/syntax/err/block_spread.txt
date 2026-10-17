@@ -1,0 +1,10 @@
+error  `cidr` is written before `..base`: a spread gives the keys the block does not write, so it leads the block
+  tests/syntax/err/block_spread.df:3  resource net.vpc v { cidr = "x", ..base }
+                                                           ^^^^^^^^^^
+  help: write `..base` first, then the block's own entries
+
+error  `..{ a = 1 }` in a copy of component c: a spread gives a provider type's attributes
+  tests/syntax/err/block_spread.df:7  resource c k { ..{ a = 1 } }
+                                                     ^^^^^^^^^^^
+  help: a copy takes each input by its name, `NAME = ..`
+2 errors

@@ -1,0 +1,4 @@
+error  expected an entry or `}`, found `..`
+  tests/syntax/err/use_spread.df:1  use fake { ..settings }
+                                               ^^
+  help: a spread gives a resource's attributes, `resource T n { ..x }`; a `use` takes each input by its name
