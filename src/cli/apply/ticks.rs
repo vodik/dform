@@ -1420,17 +1420,14 @@ impl<'a, 'h> Ticks<'a, 'h> {
             let published = crate::stack::Published::new(&cx.stored, &outputs);
             cx.dep.publish(&published.bytes())?;
         }
-        // Every deployment of a keyed stack is registered.
-        let stack_cfg = &self.located.loaded.cfg;
-        let keyed = self.located.instance.segment().is_some();
-        if (!outputs.is_empty() || !secret_types.is_empty() || stack_cfg.bootstrap || keyed)
-            && !world
-        {
+        // Every deployment applied is registered, whether it publishes or
+        // not: a tree's plan says when it was applied.
+        if !world {
             crate::stack::register(
                 root,
                 &cx.stored,
                 &self.located.location,
-                stack_cfg.bootstrap,
+                self.located.loaded.cfg.bootstrap,
             )?;
         }
         Ok(None)

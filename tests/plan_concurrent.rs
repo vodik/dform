@@ -289,42 +289,43 @@ fn a_refused_upstream_stops_its_reader_with_its_own_message() {
     assert_eq!(said(&r.stderr), said(&alone.stderr));
 }
 
-/// Apps waits for platform's plan, whose Plan call takes 5 s, before
-/// it says what it read: the wait is a span of apps' deployment, named
-/// for the one it waits on and what for (`until`), never a gap in the
-/// trace.
+/// Apps waits for platform's plan, whose Plan call (the first) takes 5 s,
+/// before it says what it read: the wait is a span of apps' deployment,
+/// named for the one it waits on and what for (`until`), never a gap in
+/// the trace. Apps' provider is the mock at a path, a process of its own
+/// configured at once: its calls never wait behind platform's.
 #[test]
 fn a_reader_s_wait_on_its_upstream_is_a_span_of_its_own() {
-    let five = std::time::Duration::from_secs(5);
-    let port = common::answering_after(five, five);
+    let port =
+        common::answering_after(std::time::Duration::from_secs(5), std::time::Duration::ZERO);
     let s = project("plan-concurrent-wait");
-    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
-    std::os::unix::fs::symlink(
-        common::exe("dform-provider-k8s"),
-        s.path("providers/k8s/dform-provider-k8s"),
-    )
-    .unwrap();
+    s.write(
+        "dform.toml",
+        &format!(
+            "[project]\nedition = \"2026\"\n\n[providers]\nt = {{ path = \"{}\" }}\n",
+            common::exe("dform-provider-fake")
+        ),
+    );
     s.write(
         "stacks/apps.df",
         r#"key env: enum("lab", "prod") = "lab"
 use stacks.platform
-use k8s { source = "./providers/k8s" }
-resource k8s.namespace apps {
-  metadata.name = "apps-${env}"
-  metadata.annotations.cidr = platform[env].cidr
-}
+use t
+resource net.vpc rec { cidr = "10.1.0.0/16", name = platform[env].cidr }
 "#,
     );
     let at = format!("127.0.0.1:{port}");
+    let started = std::time::Instant::now();
     let (r, spans) = traced(
         &s,
         &["plan", "apps"],
-        &[
-            ("DFORM_TEST_FAKE_PLAN_AWAITS", at.as_str()),
-            ("DFORM_K8S_OFFLINE", "1"),
-        ],
+        &[("DFORM_TEST_FAKE_PLAN_AWAITS", at.as_str())],
     );
     r.success();
+    assert!(
+        started.elapsed() >= std::time::Duration::from_secs(5),
+        "platform's Plan call was not the first"
+    );
     let apps = named(&spans, "deployment stacks.apps[env=lab]");
     let waits = under(&spans, apps, "waits on stacks.platform[env=lab]");
     let wait = waits

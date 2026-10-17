@@ -116,6 +116,25 @@ fn apply_with_no_target_applies_every_stack_in_dependency_order() {
     );
 }
 
+/// A deployment that publishes nothing (app) is applied all the same:
+/// the tree's plan after the apply says it is up to date, never `never
+/// applied`.
+#[test]
+fn a_deployment_with_no_outputs_is_up_to_date_after_its_apply() {
+    let s = project("apply-project-unpublished");
+    s.run(&["apply", "--yes"]).success();
+    let r = s.run(&["plan", "app"]).success();
+    for stack in ["app", "net"] {
+        assert!(
+            r.stdout
+                .lines()
+                .any(|l| l.starts_with(&format!("= stacks.{stack} ")) && l.ends_with("up to date")),
+            "{stack}: {}",
+            r.stdout
+        );
+    }
+}
+
 /// A world fixture in a tree (`dev --world W`): each deployment has its
 /// own world beside W, named for it, and its own state and lease beside
 /// that, as a tree's deployments have without one; the project's apply
