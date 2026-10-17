@@ -500,20 +500,11 @@ impl Ready {
 }
 
 fn parse_rank(v: &Value) -> Option<Rank> {
-    match v.as_str()? {
-        "default" => Some(Rank::Default),
-        transform::NORMAL => Some(Rank::Normal),
-        "override" => Some(Rank::Override),
-        _ => None,
-    }
+    Rank::parse(v.as_str()?)
 }
 
 pub(super) fn rank_name(r: Rank) -> &'static str {
-    match r {
-        Rank::Default => "default",
-        Rank::Normal => transform::NORMAL,
-        Rank::Override => "override",
-    }
+    r.name()
 }
 
 /// An `arg/5` contribution's group `(T, A, normalized P)`, rank and value;
@@ -536,7 +527,7 @@ fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value, ElemOf)> {
     };
     let Some(rank) = parse_rank(vals[4]) else {
         bail!(
-            "contribution {}: rank must be default, normal or override",
+            "contribution {}: rank must be internal, default, normal or override",
             spell::atom(a)
         );
     };

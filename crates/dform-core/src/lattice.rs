@@ -587,11 +587,17 @@ pub fn join(lat: &Lattice, path: &str, x: Elem, y: Elem) -> Elem {
 // Ranked cells
 // ---------------------------------------------------------------------------
 
+/// A contribution's rank, lowest first: the highest non-empty one decides
+/// a cell. `Internal` is a provider's own: the value it gives a field the
+/// program leaves out (k8s's `revisionHistoryLimit: 10`, an unset
+/// Optional+Computed attribute's), which every rank a program writes
+/// overrules; a program never writes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Rank {
-    Default = 0,
-    Normal = 1,
-    Override = 2,
+    Internal = 0,
+    Default = 1,
+    Normal = 2,
+    Override = 3,
 }
 
 /// The refinements the lattice can check at join time: the checkable
@@ -677,14 +683,14 @@ fn has_ref(v: &Value) -> bool {
 /// unioned, when a higher shelf is non-empty (DESIGN.org, reopening E DR-9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ranked {
-    pub ranks: [Elem; 3],
+    pub ranks: [Elem; Rank::ALL.len()],
     pub constraints: BTreeMap<Constraint, Witnesses>,
 }
 
 impl Default for Ranked {
     fn default() -> Self {
         Ranked {
-            ranks: [Elem::Bottom, Elem::Bottom, Elem::Bottom],
+            ranks: Rank::ALL.map(|_| Elem::Bottom),
             constraints: BTreeMap::new(),
         }
     }
@@ -706,7 +712,7 @@ impl Ranked {
     }
     fn join_in(&self, lat: &Lattice, other: &Ranked, path: &str) -> Ranked {
         let mut out = self.clone();
-        for i in 0..3 {
+        for i in 0..Rank::ALL.len() {
             out.ranks[i] = join(lat, path, self.ranks[i].clone(), other.ranks[i].clone());
         }
         for (c, w) in &other.constraints {
@@ -721,7 +727,7 @@ impl Ranked {
     /// Conflict, and a deferred constraint into a Conflict.
     pub fn resolve(&self, label: &str, c: &Value) -> Ranked {
         let mut out = self.clone();
-        for i in 0..3 {
+        for i in 0..Rank::ALL.len() {
             out.ranks[i] = match &self.ranks[i] {
                 Elem::Bottom => Elem::Bottom,
                 Elem::Val(v, w) => Elem::Val(subst(v, label, c), w.clone()),
@@ -739,27 +745,25 @@ impl Ranked {
 }
 
 impl Rank {
+    /// Every rank, lowest first: a cell's shelves.
+    pub const ALL: [Rank; 4] = [Rank::Internal, Rank::Default, Rank::Normal, Rank::Override];
+
     /// The rank's name in the core form `arg(T, A, P, V, Rank)`.
     pub fn name(self) -> &'static str {
         match self {
+            Rank::Internal => "internal",
             Rank::Default => "default",
             Rank::Normal => "normal",
             Rank::Override => "override",
         }
     }
     pub fn parse(s: &str) -> Option<Rank> {
-        [Rank::Default, Rank::Normal, Rank::Override]
-            .into_iter()
-            .find(|r| r.name() == s)
+        Rank::ALL.into_iter().find(|r| r.name() == s)
     }
 }
 
 fn rank_of(i: usize) -> Rank {
-    match i {
-        0 => Rank::Default,
-        1 => Rank::Normal,
-        _ => Rank::Override,
-    }
+    Rank::ALL[i]
 }
 
 // ---------------------------------------------------------------------------
@@ -2419,7 +2423,7 @@ fn keyed_overlay(
         shadowed,
         ..Gathered::default()
     };
-    let mut rank = top.unwrap_or(Rank::Default);
+    let mut rank = top.unwrap_or(Rank::Internal);
     for (k, cs) in elements.groups {
         rank = rank.max(max_rank(&cs));
         let at = format!("{path}[{}]", key_label(keys, &k));

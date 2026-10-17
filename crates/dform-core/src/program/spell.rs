@@ -59,6 +59,7 @@ fn join(xs: impl IntoIterator<Item = String>, sep: &str) -> String {
 
 fn rank(r: Option<Rank>) -> &'static str {
     match r {
+        Some(Rank::Internal) => " @internal",
         Some(Rank::Default) => " @default",
         Some(Rank::Override) => " @override",
         Some(Rank::Normal) | None => "",
