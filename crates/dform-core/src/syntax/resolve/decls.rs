@@ -440,6 +440,37 @@ impl Lowerer<'_> {
         }
     }
 
+    /// The type of a let's parameter: `secret?(T)` (a value of `T`, secret
+    /// or not, the call's value secret where it is), or any other type.
+    pub(super) fn param_type(&mut self, n: &SyntaxNode) -> TypeExpr {
+        let maybe = tokens(n).any(|t| t.kind() == QUESTION) && dotted_text(n, 0) == "secret";
+        match (maybe, node(n, TYPE_EXPR)) {
+            (true, Some(inner)) => TypeExpr::Apply(
+                crate::types::MAYBE_SECRET.into(),
+                vec![self.type_expr(&inner)],
+            ),
+            _ => self.type_expr(n),
+        }
+    }
+
+    /// `NAME?(..)` where `secret?(T)` may not stand, or another name
+    /// marked: the error.
+    fn maybe_spelled(&mut self, n: &SyntaxNode, name: &str) {
+        let (msg, help) = match name {
+            "secret" => (
+                format!("`{}` is a let's parameter's type", n.text()),
+                "a parameter may take a secret or not, its call's value secret where it is; any \
+                 other place holds one or does not: `secret(T)`, or `T`",
+            ),
+            _ => (
+                format!("`{}` is no type: `?` marks `secret?(T)` alone", n.text()),
+                "a parameter that may take a secret is `secret?(T)`",
+            ),
+        };
+        let d = Diagnostic::error(self.span(n), msg).with_help(help);
+        self.diags.push(d);
+    }
+
     /// `ref(T)` written as a type: the error, whose fix is `T`.
     fn ref_spelled(&mut self, n: &SyntaxNode) {
         let inner: Vec<String> = n
@@ -531,6 +562,9 @@ impl Lowerer<'_> {
     /// `name(args)` written as the type `n`: `ref(T)` the error whose fix
     /// is `T`, `range(T)` of an ordered `T` (R-180).
     fn applied(&mut self, n: &SyntaxNode, name: String, args: Vec<TypeExpr>) -> TypeExpr {
+        if tokens(n).any(|t| t.kind() == QUESTION) {
+            self.maybe_spelled(n, &name);
+        }
         if name == "ref" {
             self.ref_spelled(n);
         }

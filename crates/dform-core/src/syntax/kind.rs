@@ -47,6 +47,8 @@ pub enum SyntaxKind {
     SLASH,
     PERCENT,
     PIPE,
+    /// `?`: a type that may be the one it marks, `secret?(T)`.
+    QUESTION,
     /// `..` and `..=`: a range's ends (R-56).
     DOT2,
     DOT2_EQ,
@@ -243,6 +245,7 @@ impl SyntaxKind {
             SLASH => "`/`",
             PERCENT => "`%`",
             PIPE => "`|`",
+            QUESTION => "`?`",
             DOT2 => "`..`",
             DOT2_EQ => "`..=`",
             ERROR_TOKEN => "an unknown character",

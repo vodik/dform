@@ -909,6 +909,8 @@ pub enum Setting {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub var: VarId,
+    /// Its name as written.
+    pub name: Name,
     pub ty: Option<TypeExpr>,
     pub default: Option<ExprId>,
 }

@@ -112,7 +112,7 @@ impl Spans {
                 i.named.iter().for_each(|t| self.term(t));
             }
             Stmt::Input(i) => self.input(i),
-            Stmt::RelationInput(e) | Stmt::Extern(e) | Stmt::Mixed(e) | Stmt::Mode(e) => {
+            Stmt::RelationInput(e) | Stmt::Extern(e) | Stmt::Mixed(e) | Stmt::Mode(e, _) => {
                 self.span(e.span)
             }
             Stmt::Output(o) => {

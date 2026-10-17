@@ -110,7 +110,7 @@ RANK     := "@default" | "@override"
 COMMENT  := "#" to end of line
 ```
 
-Punctuation: `( ) { } [ ] , . .. ..= : = == += != < <= > >= + - * / % |`.
+Punctuation: `( ) { } [ ] , . .. ..= : = == += != < <= > >= + - * / % | ?`.
 
 `:` gives a name its type and nothing else: an input's, a column's, a
 let's or a parameter's (`input x: inet`, `decl p(a: int)`), a field of a
@@ -1123,7 +1123,14 @@ passes is applied before what the caller writes, as an entry `= web`
 orders it. Anywhere a call's argument is a resource by its bare name, it
 is the reference. Each call is answered where it is written, its rows
 its own (`why 'f(a, b, v)'` prints them `(in call at FILE:LINE:COL)`,
-under the let's rule), so a call stratifies where its site does. A let
+under the let's rule), so a call stratifies where its site does. A
+secret flows through a call as through a `let`: a parameter with no
+type, or typed `secret?(T)`, takes a secret or a public value, and the
+call's value is secret where an argument is, call by call (`let
+cloud_init(token: secret?(string), host) = "..${token}.."` called with
+a token is a secret, with a public string public). A parameter typed
+`T` takes no secret, an error at the call (E0304) naming the spelling
+that would; `secret(T)` takes either. A let
 with parameters takes no rank: its rows are a relation's, not a cell's.
 Several declarations of one take the same parameters, and are its rules.
 
@@ -2116,7 +2123,7 @@ object     := "{" (field ("," field)* ","?)? "}"
 field      := key ("=" term)? | ".." term          ; `{ a }` is `{ a = a }`; a spread
 key        := NAME | STRING
 comprehension := "[" term "|" body1 ","? "]"
-type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME ":" type)* "}" | STRING
+type       := DOTTED ("?"? "(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME ":" type)* "}" | STRING   ; "?": `secret?(T)`, a let's parameter's alone
 ```
 
 In a literal position a chain applied to arguments is an atom, unless an

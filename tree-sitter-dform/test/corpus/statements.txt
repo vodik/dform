@@ -1259,6 +1259,7 @@ let restic(
   tag,
   source: string
 ): object = { name = tag, path = source } where tag != ""
+let init(token: secret?(string), host) = token
 
 --------------------------------------------------------------------------------
 
@@ -1305,7 +1306,21 @@ let restic(
     (body
       (comparison
         (identifier)
-        (string)))))
+        (string))))
+  (let
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))
+          (type
+            (dotted_name
+              (identifier)))))
+      (parameter
+        (identifier)))
+    (identifier)))
 
 ================================================================================
 A write of a whole subtree

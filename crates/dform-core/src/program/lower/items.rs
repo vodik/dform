@@ -730,7 +730,14 @@ fn let_fn(
     let mut out = clause_rule(&l, head, body, folds, true, span);
     let relation = |pred: String, arity| ast::Extern { pred, arity, span };
     out.push(l.put_stmt(Stmt::Extern(relation(demand, arity - 1))));
-    out.push(l.put_stmt(Stmt::Mode(relation(name.to_string(), arity))));
+    let types = params
+        .iter()
+        .map(|p| ast::LetParam {
+            name: p.name.clone(),
+            ty: p.ty.clone(),
+        })
+        .collect();
+    out.push(l.put_stmt(Stmt::Mode(relation(name.to_string(), arity), types)));
     out.append(&mut l.helpers);
     out
 }

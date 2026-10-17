@@ -797,8 +797,13 @@ pub fn taint(
             )
         })
         .collect();
+    // A let's relation gathers its calls' copies: a row is secret where
+    // its copy's is, which says so by its own column.
+    let unions: BTreeSet<String> = crate::demand::copies(&lowered.program)
+        .into_values()
+        .collect();
     for ((pred, col), label) in &pass.secret {
-        if CELL_PREDS.contains(&pred.as_str()) {
+        if CELL_PREDS.contains(&pred.as_str()) || unions.contains(pred) {
             continue;
         }
         for p in label {
@@ -854,6 +859,9 @@ struct Checker<'a> {
     pass: Pass<'a>,
     /// The program's externs, by name.
     fns: BTreeMap<&'a str, &'a crate::ast::ExternFn>,
+    /// The copy of a let with parameters each call reads, with the let
+    /// (`demand::copies`).
+    calls: BTreeMap<String, String>,
     diags: Vec<Diagnostic>,
 }
 
@@ -881,6 +889,7 @@ impl<'a> Checker<'a> {
                 .iter()
                 .map(|f| (f.name.as_str(), f))
                 .collect(),
+            calls: crate::demand::copies(&lowered.program),
             diags: Vec::new(),
         }
     }
@@ -890,13 +899,19 @@ impl<'a> Checker<'a> {
         if self.diags.is_empty() {
             return Ok(());
         }
-        self.diags
-            .dedup_by(|a, b| a.render(false) == b.render(false));
+        // A literal several rules hold is said once, where it is first.
+        let mut seen = BTreeSet::new();
+        self.diags.retain(|d| seen.insert(d.render(false)));
         Err(Diagnostics(self.diags).into())
     }
 
-    /// An extern's `+` column is asked with, not answered: it binds nothing.
+    /// An extern's `+` column is asked with, not answered: it binds
+    /// nothing; nor does a call's argument, which a let's parameter takes
+    /// as it is, secret or not (its value is secret where one is).
     fn binds(&self, a: &Atom, i: usize) -> bool {
+        if self.calls.contains_key(&a.pred) {
+            return i + 1 == a.args.len();
+        }
         self.fns
             .get(a.pred.as_str())
             .and_then(|f| f.args.get(i))
@@ -922,6 +937,7 @@ impl<'a> Checker<'a> {
             refinement: is_refinement(head, body),
         };
         self.coeffects(&r);
+        self.calls(&r);
         if !r.refinement {
             self.joins(&r);
         }
@@ -985,6 +1001,31 @@ impl<'a> Checker<'a> {
                         )
                         .with_help(fix),
                     );
+                }
+            }
+        }
+        self.diags.extend(diags);
+    }
+
+    /// E0304: a secret given to a let's parameter declared of a type other
+    /// than `secret(T)`, at the call. A parameter with no type takes a
+    /// secret as a `let` does, and the call's value is secret where an
+    /// argument is (each call answered by its own copy, `demand`).
+    fn calls(&mut self, r: &Rule) {
+        let mut diags = Vec::new();
+        for l in r.body {
+            let Lit::Pos(a) = l else { continue };
+            let Some(f) = self.calls.get(&a.pred) else {
+                continue;
+            };
+            let params = self.lowered.let_params.get(f).into_iter().flatten();
+            for (p, t) in params.zip(&a.args) {
+                let Some(ty) = p.ty.as_ref().filter(|t| !is_secret_type(t)) else {
+                    continue;
+                };
+                if self.secret(r, t) {
+                    let at = if a.span.is_none() { r.span } else { a.span };
+                    diags.push(secret_parameter(at, f, p, ty));
                 }
             }
         }
@@ -1435,6 +1476,37 @@ fn definedness(x: &Term, y: &Term) -> bool {
 
 /// E0301 at `span`, `what` inspecting a secret, with the fix that
 /// applies there ([`Pass::inspect_fix`]).
+/// Whether `t` takes a secret: `secret(T)`, `secret?(T)`.
+fn is_secret_type(t: &crate::ast::TypeExpr) -> bool {
+    matches!(t, crate::ast::TypeExpr::Apply(n, _)
+        if n == "secret" || n == crate::types::MAYBE_SECRET)
+}
+
+/// E0304 of a secret given at `span` to the let `f`'s parameter `p`,
+/// declared `ty`: the fix is the parameter's spelling.
+fn secret_parameter(
+    span: Span,
+    f: &str,
+    p: &crate::ast::LetParam,
+    ty: &crate::ast::TypeExpr,
+) -> Diagnostic {
+    let f = f.rsplit("::").next().unwrap_or(f);
+    let ty = crate::inputs::type_text(ty);
+    Diagnostic::error(
+        span,
+        format!(
+            "E0304: a secret is given to `{f}`'s `{name}`, declared `{ty}`, which takes no \
+             secret",
+            name = p.name
+        ),
+    )
+    .with_help(format!(
+        "declare it `{name}: secret?({ty})`: it takes a secret or not, and the call's value \
+         is secret where an argument is, as a `let`'s is; a parameter with no type does too",
+        name = p.name
+    ))
+}
+
 fn e0301(span: Span, what: &str, fix: String) -> Diagnostic {
     Diagnostic::error(
         span,

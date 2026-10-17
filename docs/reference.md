@@ -2636,7 +2636,7 @@ is a compile error with a span, before anything is evaluated:
 | E0301 | a test or an inspecting function: `==` (a binding's too, `pw(p), p == "x"`), `!=`, `<` and the orders, `in` either side, `has`, a join (`pw(p), known(p)`), a builtin predicate, `len`, `split`, `inet_*`; a field's (`conn.password == ..`) and an interpolation's (`"${pw}!" == ..`) |
 | E0302 | a negated literal, `not has` included: absence leaks a bit |
 | E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
-| E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a provider's setting it does not declare sensitive (when it declares its settings), an output or input not declared `secret(T)`, a `deny`/`warn` |
+| E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a provider's setting it does not declare sensitive (when it declares its settings), an output or input not declared `secret(T)`, a `deny`/`warn`, a let's parameter typed `T` (at the call) |
 | E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
 | E0306 | what a coeffect is asked with, sent off the machine at plan: a location (`io.read("https://x/${pw}")`), an extern's `+` column not declared `+x: secret(T)` |
 
@@ -2665,6 +2665,15 @@ E0302, because presence is a bit too. A `forwards` function
 its result is. `secret.declassify(pw, "why")` is the way to test one on
 purpose. A field of an object that is not secret (`conn.host`) is tested
 freely.
+
+A function carries a secret as a `let` does. A parameter with no type,
+or typed `secret?(T)`, takes a secret or a public value, and each call's
+value is secret where its arguments are: with `let cloud_init(token:
+secret?(string), host) = "..${token}.."`, `cloud_init(k3s_token, "a")`
+is a secret, to go where a secret may, and `cloud_init("t", "b")` is a
+public string that prints. A parameter typed `T` takes no secret: the
+call that gives it one is E0304 at the call, naming the parameter and
+`secret?(T)`.
 
 An input's own refinement (`input pw: secret(string) check pw.len >=
 12`) is where a secret may be checked; its deny does not print the value.

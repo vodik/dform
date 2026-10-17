@@ -306,7 +306,7 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if matches!(p, PLUS | MINUS) && matches!(pp, Some(UNARY_EXPR | BIND_ARG)) {
         return "";
     }
-    if matches!(c, COMMA | R_PAREN) || c == COLON && !object_colon(cur) {
+    if matches!(c, COMMA | R_PAREN | QUESTION) || c == COLON && !object_colon(cur) {
         return "";
     }
     // Calls, atoms, type applications, declarations, a let's parameters

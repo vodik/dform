@@ -102,6 +102,8 @@ enum Tok {
     Percent,
     #[token("|")]
     Pipe,
+    #[token("?")]
+    Question,
 }
 
 /// A string token: to its closing quote past every hole (`string_end`),
@@ -214,6 +216,7 @@ fn kind(t: Tok) -> SyntaxKind {
         Tok::Slash => SLASH,
         Tok::Percent => PERCENT,
         Tok::Pipe => PIPE,
+        Tok::Question => QUESTION,
     }
 }
 

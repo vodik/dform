@@ -209,7 +209,7 @@ pub fn head_span(stmt: &Stmt) -> Span {
         Stmt::Module(m) => m.span,
         Stmt::Instance(i) | Stmt::Use(i) => i.span,
         Stmt::Input(i) => i.span,
-        Stmt::RelationInput(e) | Stmt::Extern(e) | Stmt::Mixed(e) | Stmt::Mode(e) => e.span,
+        Stmt::RelationInput(e) | Stmt::Extern(e) | Stmt::Mixed(e) | Stmt::Mode(e, _) => e.span,
         Stmt::Output(o) => o.span,
         Stmt::Provider(c) => c.span,
         Stmt::Resource(r) => r.span,

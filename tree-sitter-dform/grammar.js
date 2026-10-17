@@ -684,9 +684,10 @@ export default grammar({
 
     _type: $ => choice($.type, $.record_type, $.string),
 
+    // `secret?(T)`: a let's parameter that takes a secret or not.
     type: $ => seq(
       field('name', $.dotted_name),
-      optional(seq('(', commaSep1(field('argument', $._type)), ')')),
+      optional(seq(optional('?'), '(', commaSep1(field('argument', $._type)), ')')),
     ),
 
     record_type: $ => seq('{', commaSepTrailing($.field_declaration), '}'),

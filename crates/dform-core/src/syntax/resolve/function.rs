@@ -81,12 +81,13 @@ impl Lowerer<'_> {
                 v.push('_');
             }
             inner.vars.insert(p.name.clone(), v.clone());
-            let ty = p.ty.as_ref().map(|t| self.type_expr(t));
+            let ty = p.ty.as_ref().map(|t| self.param_type(t));
             if let Some(crate::types::Ty::Ref(t)) = ty.as_ref().map(crate::types::of_expr) {
                 inner.types.insert(p.name.clone(), str_term(&t));
                 inner.row_refs.insert(p.name.clone());
             }
-            vars.push((v, ty));
+            let name = p.name.clone();
+            vars.push((v, crate::ast::LetParam { name, ty }));
         }
         let mut rc = self.rc(n, scope, &inner);
         self.opt_body(&mut rc, n)?;
@@ -286,7 +287,7 @@ impl Lowerer<'_> {
             let was = self.term_of(arg);
             let term = match &p.ty {
                 Some(t) => {
-                    let te = self.type_expr(t);
+                    let te = self.param_type(t);
                     let ty = crate::types::of_expr(&te);
                     match crate::types::literal(&ty, was.clone()) {
                         Ok(t) => t,
@@ -373,7 +374,7 @@ impl Lowerer<'_> {
     /// is the reference, as a block's entry takes it, and a name two
     /// resources share is the one of type `T` (R-74).
     fn param_arg(&mut self, rc: &mut Rc, t: &SyntaxNode, p: &Param) -> L<ExprId> {
-        let ty = p.ty.as_ref().map(|t| self.type_expr(t));
+        let ty = p.ty.as_ref().map(|t| self.param_type(t));
         match ty.as_ref().map(crate::types::of_expr) {
             Some(crate::types::Ty::Ref(typ)) => {
                 self.wanting(Want::Type(typ), |l| l.expr(rc, t, Pos::Value))

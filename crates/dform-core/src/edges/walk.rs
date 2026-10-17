@@ -74,7 +74,7 @@ impl Graph<'_> {
             Stmt::Decl(d) => self.decl(d, scope),
             Stmt::ExternFn(e) => self.extern_fn(e, scope),
             // A let with parameters (R-187): its last column its value.
-            Stmt::Mode(e) if e.arity > 0 => {
+            Stmt::Mode(e, _) if e.arity > 0 => {
                 let col = (
                     self.declaring(scope, &e.pred),
                     e.pred.clone(),

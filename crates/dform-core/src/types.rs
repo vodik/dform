@@ -649,6 +649,10 @@ fn object_mismatch<'k>(
 
 /// A declared type (an input's, a module input's) as the check reads it:
 /// a resource type is a reference to one; an alias is already expanded.
+/// `secret?(T)`, a let's parameter's type: a value of `T`, secret or not;
+/// the call's value is secret where the argument is (`secrets`).
+pub const MAYBE_SECRET: &str = "secret?";
+
 pub fn of_expr(t: &TypeExpr) -> Ty {
     match t {
         TypeExpr::Name(n) if n.contains('.') => Ty::Ref(n.clone()),
@@ -658,6 +662,7 @@ pub fn of_expr(t: &TypeExpr) -> Ty {
             ("list" | "set", [x]) => Ty::List(Box::new(of_expr(x))),
             ("map", [x]) => Ty::Map(Box::new(of_expr(x))),
             ("secret", [x]) => Ty::Secret(Box::new(of_expr(x))),
+            (MAYBE_SECRET, [x]) => of_expr(x),
             ("range", [TypeExpr::Name(t)]) => range(t),
             ("enum", xs) => Ty::Enum(
                 xs.iter()

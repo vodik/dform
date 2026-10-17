@@ -34,6 +34,31 @@ pub fn of(f: &str) -> String {
     format!("{f}?")
 }
 
+/// The calls [`answer`] answered in `program`: the copy each call site
+/// reads (a relation whose demand a rule derives), by its relation, with
+/// the let it is a copy of, whose relation gathers the copies' rows
+/// ([`union`]). A call's columns but its last are what it asks with, as a
+/// data source's `+` columns are, and bind nothing.
+pub fn copies(program: &Program) -> BTreeMap<String, String> {
+    let rules = || {
+        program.statements.iter().filter_map(|s| match s {
+            Stmt::Rule(r) => Some(r),
+            _ => None,
+        })
+    };
+    let demanded: BTreeSet<&str> = rules()
+        .filter_map(|r| r.head.pred.strip_suffix('?'))
+        .collect();
+    rules()
+        .filter_map(|r| match r.body.as_slice() {
+            [Lit::Pos(a)] if demanded.contains(a.pred.as_str()) && a.args == r.head.args => {
+                Some((a.pred.clone(), r.head.pred.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// The lets with parameters of `program` (their relations as expansion
 /// named them) answered at each site; the `Mode` statements gone.
 /// `externs` are the data sources' relations, which a let may not read.
@@ -42,7 +67,7 @@ pub fn answer(program: Program, externs: &BTreeSet<String>) -> Result<Program> {
         .statements
         .iter()
         .filter_map(|s| match s {
-            Stmt::Mode(e) => Some((e.pred.clone(), e.span)),
+            Stmt::Mode(e, _) => Some((e.pred.clone(), e.span)),
             _ => None,
         })
         .collect();
@@ -223,7 +248,7 @@ impl Lets {
         let mut queue = std::collections::VecDeque::new();
         for s in program.statements {
             match s {
-                Stmt::Mode(_) => {}
+                Stmt::Mode(..) => {}
                 Stmt::Rule(r) if self.owns(&r) => {}
                 Stmt::Rule(r) => queue.push_back((r, None)),
                 other => kept.push(other),

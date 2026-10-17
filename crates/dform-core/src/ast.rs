@@ -287,8 +287,10 @@ pub enum Stmt {
     ExternFn(ExternFn),
     /// `let f(a, b) = t` (R-187): the relation `f(a, b, v)` the program
     /// answers on demand, its columns but the last bound by the literal
-    /// that reads it, as a provider's table's `+` columns are (`demand`).
-    Mode(Extern),
+    /// that reads it, as a provider's table's `+` columns are (`demand`);
+    /// with each parameter's declared type, which the secrets pass reads
+    /// (a parameter of a type other than `secret(T)` takes no secret).
+    Mode(Extern, Vec<LetParam>),
     /// A statement the grammar has and the evaluator does not yet: lowering
     /// rejects it naming the ticket that brings it.
     Pending(Pending),
@@ -606,6 +608,14 @@ pub enum TypeExpr {
     Apply(String, Vec<TypeExpr>),
     Object(Vec<(String, TypeExpr)>),
     Str(String),
+}
+
+/// A parameter of a `let` with parameters (R-187): its name as written
+/// and its declared type, `None` where it declares none.
+#[derive(Debug, Clone)]
+pub struct LetParam {
+    pub name: String,
+    pub ty: Option<TypeExpr>,
 }
 
 /// `+name: type` (input) or `-name: type` (output) of an extern.

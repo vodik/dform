@@ -93,7 +93,7 @@ impl<'p> Lowering<'p> {
             Stmt::Fact(a) => Stmt::Fact(c.atom_from(a, from)),
             Stmt::Extern(e) => Stmt::Extern(c.relation(e, from)),
             Stmt::Mixed(e) => Stmt::Mixed(c.relation(e, from)),
-            Stmt::Mode(e) => Stmt::Mode(c.relation(e, from)),
+            Stmt::Mode(e, types) => Stmt::Mode(c.relation(e, from), types),
             s => s,
         }
     }

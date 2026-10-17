@@ -223,6 +223,7 @@ mod scoped_graph;
 mod sealed_outputs;
 mod secret_everywhere;
 mod secret_fields;
+mod secret_functions;
 mod secret_joins;
 mod secret_operators;
 mod secret_provider_config;

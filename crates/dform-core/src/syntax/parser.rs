@@ -1638,7 +1638,7 @@ impl<'a> Parser<'a> {
         (self.raw(1).is_word() || self.raw(1) == STRING) && self.raw(2) == COLON
     }
 
-    /// `type := name | name(type, ...) | { name: type, ... } | STRING`
+    /// `type := name | name "?"? (type, ...) | { name: type, ... } | STRING`
     fn type_expr(&mut self) -> P {
         self.start(TYPE_EXPR);
         match self.nth(0) {
@@ -1665,6 +1665,10 @@ impl<'a> Parser<'a> {
             }
             k if k.is_word() => {
                 self.dotted("a type")?;
+                // `secret?(T)`: the resolver says where it may stand.
+                if self.at(QUESTION) && self.raw(1) == L_PAREN {
+                    self.bump();
+                }
                 if self.at(L_PAREN) {
                     self.bump();
                     self.with_nl(false, |p| {

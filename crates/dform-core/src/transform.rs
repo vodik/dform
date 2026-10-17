@@ -24,6 +24,10 @@ pub struct Lowered {
     pub secret_outputs: Vec<(String, String)>,
     /// Every output declared with a type, by (scope, name).
     pub output_types: std::collections::BTreeMap<(String, String), crate::ast::TypeExpr>,
+    /// Each let with parameters' declared parameter types, by its
+    /// relation (`None` where one declares none): a call's copy reads it
+    /// through `demand::copies`.
+    pub let_params: BTreeMap<String, Vec<crate::ast::LetParam>>,
 }
 
 /// `secret_cell(Type, Scope, Key)`: an input or output declared
@@ -110,6 +114,14 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     expanded = crate::tables::expand_set_from(expanded, &mut inputs);
     // A let with parameters is answered at each site that reads it (R-187).
     let sources = extern_fns.iter().map(|f| f.name.clone()).collect();
+    let let_params = expanded
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Mode(e, types) => Some((e.pred.clone(), types.clone())),
+            _ => None,
+        })
+        .collect();
     expanded = crate::demand::answer(expanded, &sources)?;
     crate::externs::check(&expanded, &extern_fns)?;
     // The cells of secret inputs and outputs, for the Redactor.
@@ -142,6 +154,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         extern_fns,
         secret_outputs,
         output_types,
+        let_params,
     })
 }
 
