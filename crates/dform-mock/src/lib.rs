@@ -1418,6 +1418,9 @@ pub struct Mock {
     in_process: bool,
     /// The address whose Apply crashed the mock linked in.
     crashed: Mutex<Option<String>>,
+    /// The sessions configured with the endpoint that is gone
+    /// ([`gone`]), each with its Configure's deployment.
+    dead: Mutex<BTreeMap<Session, Json>>,
 }
 
 impl Mock {
@@ -1436,7 +1439,41 @@ impl Mock {
             clouds: Configured::default(),
             in_process,
             crashed: Mutex::new(None),
+            dead: Mutex::default(),
         }
+    }
+
+    /// A call in `session`, configured with the endpoint that is gone
+    /// ([`gone`]): recorded, and answered as one to a server that is gone
+    /// is, once a connect gives up.
+    fn dead(&self, session: Session, call: &backend::Call) -> std::result::Result<(), CallError> {
+        let dead = self.dead.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(stack) = dead.get(&session).cloned() else {
+            return Ok(());
+        };
+        drop(dead);
+        record(&json!({ "stack": stack, "dead": call.method() }));
+        std::thread::sleep(std::time::Duration::from_secs(DEAD_SECS));
+        Err(CallError::Refused(
+            "retryable: connect: the server is gone (timed out)".into(),
+        ))
+    }
+
+    /// `session` configured with `config`: one that gives the endpoint
+    /// that is gone ([`gone`]) is dead from now, its Configure first (it
+    /// reaches the server, as Kubernetes's asks its API).
+    fn configured_gone(
+        &self,
+        session: Session,
+        config: &Json,
+    ) -> std::result::Result<(), CallError> {
+        let mut dead = self.dead.lock().unwrap_or_else(|e| e.into_inner());
+        match gone(config) {
+            true => dead.insert(session, config.get("stack").cloned().unwrap_or_default()),
+            false => dead.remove(&session),
+        };
+        drop(dead);
+        self.dead(session, &backend::Call::Configure(Default::default()))
     }
 
     /// `f` of `session`'s cloud, locked; refused when no Configure opened
@@ -1473,16 +1510,20 @@ fn invalid(e: anyhow::Error) -> CallError {
 /// program's settings appends them to FILE, a JSON line of the deployment
 /// (`stack`) and its `settings`. The native build's only, as its file is
 /// the host's.
-#[cfg(not(target_family = "wasm"))]
 fn record_settings(config: &Json) {
+    if let Some(settings) = config.get("settings") {
+        record(&json!({ "stack": config.get("stack"), "settings": settings }));
+    }
+}
+
+/// `line`, appended to `DFORM_TEST_RECORD_SETTINGS`'s file when a test
+/// names one.
+#[cfg(not(target_family = "wasm"))]
+fn record(line: &Json) {
     use std::io::Write;
-    let (Some(file), Some(settings)) = (
-        std::env::var_os("DFORM_TEST_RECORD_SETTINGS"),
-        config.get("settings"),
-    ) else {
+    let Some(file) = std::env::var_os("DFORM_TEST_RECORD_SETTINGS") else {
         return;
     };
-    let line = json!({ "stack": config.get("stack"), "settings": settings });
     let appended = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1494,7 +1535,25 @@ fn record_settings(config: &Json) {
 }
 
 #[cfg(target_family = "wasm")]
-fn record_settings(_config: &Json) {}
+fn record(_line: &Json) {}
+
+/// How long a call to the endpoint that is gone takes to fail.
+const DEAD_SECS: u64 = 5;
+
+/// In a test of a provider configured from an endpoint that is gone (a
+/// server its upstream's plan replaces), `DFORM_TEST_DEAD_ENDPOINT=VALUE`:
+/// whether `config`'s settings give VALUE. Each call but a Configure in
+/// a session so configured is recorded (`{stack, dead: METHOD}` in
+/// `DFORM_TEST_RECORD_SETTINGS`) and fails after [`DEAD_SECS`].
+fn gone(config: &Json) -> bool {
+    let Some(dead) = std::env::var_os("DFORM_TEST_DEAD_ENDPOINT") else {
+        return false;
+    };
+    config
+        .get("settings")
+        .and_then(Json::as_object)
+        .is_some_and(|s| s.values().any(|v| v.as_str() == dead.to_str()))
+}
 
 /// In a test of what runs while a Plan call is in flight
 /// (`DFORM_TEST_FAKE_PLAN_AWAITS=HOST:PORT`): the call first asks that
@@ -1570,6 +1629,9 @@ impl Handler for Mock {
                 "the provider fakecloud has exited (chaos crash={at})"
             )));
         }
+        if !matches!(call, C::Handshake(_) | C::Configure(_)) {
+            self.dead(session, &call)?;
+        }
         Ok(match call {
             C::Handshake(req) => {
                 let v = req.protocol_version;
@@ -1617,6 +1679,7 @@ impl Handler for Mock {
             C::Configure(req) => {
                 let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
                 record_settings(&config);
+                self.configured_gone(session, &config)?;
                 let in_process = self.in_process;
                 let cloud = self.clouds.get_or_set(session, || {
                     Mutex::new(FakeCloud {

@@ -308,12 +308,19 @@ Deployments that read nothing of each other (a project's `prod` and
 `staging`) wait on nothing. A replace in an upstream's plan makes what its evaluation knew
 of the replaced object (a computed endpoint) known only after a tick: a
 reader that read the old value is planned again over the plan's before
-it says anything. A provider is never configured from what an upstream's
-plan has not settled: one whose settings read an upstream's output (`use
-k8s { kubeconfig = platform.kubeconfig }`) waits for that upstream's plan
-(`waits on stacks.platform[env=lab]`, until `planned`), so no call goes
-to a server the plan replaces; its rows then wait on the provider,
-provisional. A deployment whose plan changes nothing but holds rows says
+it says anything. A provider whose settings read an upstream's output
+(`use k8s { kubeconfig = platform.kubeconfig }`) is configured at once
+from what the upstream published, provisionally while the upstream's
+plan goes: its first call has 5 s at most to be answered (the
+provider's `timeout`, if shorter), and a call that fails is sent again
+only once the plan makes known what was read (`waits on
+stacks.platform[env=lab]`, until `planned`), never retried against a
+server the plan replaces. Nothing it read is said, approved or applied
+before then: a plan that makes other known (a replace of the server the
+kubeconfig is read from) plans the reader again over the plan's, its
+rows then waiting on the provider, provisional; one that settles it as
+read after a call failed plans it again under the provider's own
+timeout and retries. A deployment whose plan changes nothing but holds rows says
 so, never `up to date`: `~ stacks.apps  up to date but for 1 held,
 waiting on provider k8s  kubeconfig = platform.kubeconfig`, its held
 section under it. The plan prints as it did, each deployment's section

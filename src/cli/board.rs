@@ -12,10 +12,18 @@
 //! only after the replace: a run that read otherwise than an upstream's
 //! plan has it is planned again over the plan's, before it says anything
 //! ([`Upstreams::planned`], [`Verdict::Again`]).
+//!
+//! A provider configured from what an upstream published, its plan not
+//! made yet, is provisional ([`Pending`], `plugin::policy::Unsettled`)
+//! until the plan settles it: a call of it that failed is sent again only
+//! once the plan makes known what was read, and the run is made again if
+//! it failed for it ([`Upstreams::failed_provisionally`]).
 
+use crate::plugin::policy::Unsettled;
 use crate::stack::Planned;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// How far a deployment of the tree's plan is.
@@ -175,6 +183,51 @@ pub(super) struct Upstreams {
     me: usize,
     of: Vec<usize>,
     read: Arc<Mutex<Option<BTreeMap<String, Read>>>>,
+    /// A call of a provider configured from what was not settled failed.
+    failed: Arc<AtomicBool>,
+}
+
+impl crate::deployment::Settles for Upstreams {
+    /// Settled when the plans of those of `names` are made and make known
+    /// what the run read; while one is not made yet, what settles them
+    /// ([`Pending`]): the provider is configured from what was read at
+    /// once, provisionally.
+    fn of(&self, names: BTreeSet<String>) -> Result<Option<Arc<dyn Unsettled>>> {
+        let of = self.named(&names);
+        let settled = {
+            let known = self.board.known();
+            self.settled_on(&of, &known)?
+        };
+        Ok(match settled {
+            true => None,
+            false => Some(Arc::new(Pending {
+                up: self.clone(),
+                of,
+            })),
+        })
+    }
+}
+
+/// The outputs of those `of` a run reads that a provider is configured
+/// from, their plans not made yet.
+struct Pending {
+    up: Upstreams,
+    of: Vec<usize>,
+}
+
+impl Unsettled for Pending {
+    fn settled(&self) -> Result<bool> {
+        let known = self.up.board.known();
+        self.up.settled_on(&self.of, &known)
+    }
+
+    fn settle(&self) -> Result<()> {
+        self.up.settle(&self.of)
+    }
+
+    fn failed(&self) {
+        self.up.failed.store(true, Ordering::Relaxed);
+    }
 }
 
 /// What a run read of one it reads, to compare with its plan's.
@@ -206,6 +259,7 @@ impl Upstreams {
             me,
             of,
             read: Arc::default(),
+            failed: Arc::default(),
         }
     }
 
@@ -281,20 +335,23 @@ impl Upstreams {
         }
     }
 
-    /// Once those of `names` it reads (as it names them) are planned: an
-    /// error when one was not, or made known other than the run read
-    /// (it is planned again over the plans'). What a provider configured
-    /// from their outputs waits on (`deployment::Settle`).
-    pub(super) fn settle(&self, names: &BTreeSet<String>) -> Result<()> {
-        let of: Vec<usize> = self
-            .of
+    /// Those of `of` it reads named in `names` (as it names them).
+    fn named(&self, names: &BTreeSet<String>) -> Vec<usize> {
+        self.of
             .iter()
             .copied()
             .filter(|&j| names.contains(&self.board.names[j]))
-            .collect();
-        let known = self.board.wait(&of, Known::settled, "planned");
+            .collect()
+    }
+
+    /// Whether those of `of` are settled on `known` as the run read them:
+    /// `Ok(false)` while one is not planned yet; an error when one was
+    /// not planned, or made known other than the run read (it is planned
+    /// again over the plans').
+    fn settled_on(&self, of: &[usize], known: &[Known]) -> Result<bool> {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
-        for &j in &of {
+        let mut settled = true;
+        for &j in of {
             let name = &self.board.names[j];
             match &known[j] {
                 Known::Stopped(why) => bail!("not planned: {why}"),
@@ -306,10 +363,25 @@ impl Upstreams {
                 {
                     bail!("planned again: what it reads changed in their plans")
                 }
-                _ => {}
+                Known::Planned(_) => {}
+                Known::Pending | Known::Evaluated(_) => settled = false,
             }
         }
-        Ok(())
+        Ok(settled)
+    }
+
+    /// Once those of `names` it reads are planned: [`Upstreams::settled_on`]'s
+    /// error, else settled.
+    fn settle(&self, of: &[usize]) -> Result<()> {
+        let known = self.board.wait(of, Known::settled, "planned");
+        self.settled_on(of, &known).map(|_| ())
+    }
+
+    /// Whether a call of a provider configured from what was not settled
+    /// failed: a run whose upstreams' plans then settled it as read is
+    /// made again, its calls under their providers' own policies.
+    pub(super) fn failed_provisionally(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
     }
 
     /// What the run comes to, once those it reads are planned.

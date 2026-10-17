@@ -205,17 +205,21 @@ fn a_readers_call_waits_for_the_call_that_changes_the_secret_it_reads() {
 }
 
 /// A reader's provider configured from an output its upstream's plan
-/// replaces (the server a kubeconfig names): the reader is never
-/// configured from the old value, so no read goes to a server about to
-/// go. Its rows wait on the provider, provisional, and its plan says
-/// what it holds and on what; once the tick replaces the server the
-/// provider is configured from the new one.
+/// replaces (the server a kubeconfig names, gone): the reader configures
+/// it at once from what the upstream published, provisionally, while the
+/// upstream's plan goes (its Plan call, the first, slowed); the old server is tried
+/// once, within the first contact's timeout (its 1 s), and never again.
+/// The upstream's plan replaces it, so the reader is planned again over
+/// the plan's, its rows waiting on the provider, and its plan says what it
+/// holds and on what. Once the tick replaces the server the provider is
+/// configured from the new one.
 #[test]
-fn a_provider_configured_from_an_output_its_upstream_replaces_is_never_given_the_old_one() {
+fn a_provider_configured_from_an_output_its_upstream_replaces_tries_the_old_one_once() {
     let s = Scratch::project("tree-tick-stale");
     s.write(
         "dform.toml",
-        "[project]\nedition = \"2026\"\n\n[providers]\nt = \"providers/t\"\nk8s = \"k8s\"\n",
+        "[project]\nedition = \"2026\"\n\n[providers]\nt = \"providers/t\"\n\
+         k8s = { source = \"k8s\", timeout = \"1s\" }\n",
     );
     s.write(
         "providers/t/schema.df",
@@ -239,20 +243,52 @@ fn a_provider_configured_from_an_output_its_upstream_replaces_is_never_given_the
          resource k8s.namespace apps { metadata.name = \"apps\" }\noutput ns = \"apps\"\n",
     );
     let recorded = s.path("settings.jsonl");
-    let run = |args: &[&str]| {
+    let run = |args: &[&str], env: &[(&str, &str)]| {
         let out = common::dform()
             .args(args)
             .current_dir(&s.dir)
             .env("NO_COLOR", "1")
             .env("DFORM_TEST_RECORD_SETTINGS", &recorded)
+            .envs(env.iter().copied())
+            .env_remove("DFORM_TRACE")
             .output()
             .unwrap();
         common::Run::from(out).success()
     };
-    run(&["apply", "apps", "--yes"]);
-    s.write("stacks/platform.df", &platform("b"));
+    // Apps' lines in the record since the last taken: each kubeconfig its
+    // k8s was configured with, and each call to the server that is gone.
+    let take = || -> (Vec<String>, Vec<String>) {
+        let lines = s.read("settings.jsonl");
+        std::fs::remove_file(&recorded).unwrap();
+        let apps: Vec<Json> = lines
+            .lines()
+            .map(|l| serde_json::from_str::<Json>(l).unwrap())
+            .filter(|l| l["stack"] == "apps")
+            .collect();
+        let of = |k: &str| {
+            apps.iter()
+                .filter_map(|l| l.pointer(k)?.as_str().map(str::to_string))
+                .collect()
+        };
+        (of("/settings/kubeconfig"), of("/dead"))
+    };
+    run(&["apply", "apps", "--yes"], &[]);
     std::fs::remove_file(&recorded).unwrap();
-    let r = run(&["plan", "apps"]);
+    s.write("stacks/platform.df", &platform("b"));
+    // Platform's Plan call, the first, slowed: apps configures k8s while
+    // platform plans.
+    let slowed = || {
+        let port =
+            common::answering_after(std::time::Duration::from_secs(3), std::time::Duration::ZERO);
+        format!("127.0.0.1:{port}")
+    };
+    let r = run(
+        &["plan", "apps", "--trace", "trace.jsonl"],
+        &[
+            ("DFORM_TEST_FAKE_PLAN_AWAITS", &slowed()),
+            ("DFORM_TEST_DEAD_ENDPOINT", "https://a.example"),
+        ],
+    );
     assert!(
         r.stdout.contains(
             "~ stacks.apps      stacks/apps.df  up to date but for 1 held, waiting on provider \
@@ -261,18 +297,46 @@ fn a_provider_configured_from_an_output_its_upstream_replaces_is_never_given_the
         "{}",
         r.stdout
     );
-    run(&["apply", "apps", "--yes"]);
-    let kubeconfigs: Vec<String> = s
-        .read("settings.jsonl")
-        .lines()
-        .map(|l| serde_json::from_str::<Json>(l).unwrap())
-        .filter(|l| l["stack"] == "apps")
-        .map(|l| {
-            l["settings"]["kubeconfig"]
+    let (kubeconfigs, dead) = take();
+    assert_eq!(
+        kubeconfigs,
+        ["https://a.example"],
+        "configured at once from what platform published"
+    );
+    assert_eq!(dead, ["Configure"], "the server that is gone, once");
+    // Its Configure gave up after the first contact's timeout, not the
+    // server's 5 s.
+    let spans = common::spans(&s.path("trace.jsonl"));
+    let ns = |x: &Json, k: &str| x[k].as_str().unwrap().parse::<u128>().unwrap();
+    let first = spans
+        .iter()
+        .filter(|x| x["name"] == "deployment stacks.apps")
+        .min_by_key(|x| ns(x, "startTimeUnixNano"))
+        .expect("apps' deployment");
+    let mut ids = vec![first["spanId"].clone()];
+    let mut longest = 0;
+    while let Some(id) = ids.pop() {
+        for x in spans.iter().filter(|x| x["parentSpanId"] == id) {
+            ids.push(x["spanId"].clone());
+            if x["name"]
                 .as_str()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect();
-    assert_eq!(kubeconfigs, ["https://b.example"], "the new server's alone");
+                .is_some_and(|n| n.starts_with("configure"))
+            {
+                longest = longest.max(ns(x, "endTimeUnixNano") - ns(x, "startTimeUnixNano"));
+            }
+        }
+    }
+    assert!(
+        (900_000_000..3_000_000_000).contains(&longest),
+        "apps' longest configure: {longest} ns"
+    );
+    run(
+        &["apply", "apps", "--yes"],
+        &[("DFORM_TEST_FAKE_PLAN_AWAITS", &slowed())],
+    );
+    assert_eq!(
+        take().0,
+        ["https://a.example", "https://b.example"],
+        "the old server's while platform plans, then the new one's"
+    );
 }

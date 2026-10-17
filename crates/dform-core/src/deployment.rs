@@ -21,6 +21,7 @@ use crate::diag::{Diagnostic, Diagnostics, Fix};
 use crate::engine::{self, EvalResult};
 use crate::externs::{self, Externs};
 use crate::inputs::{self, Declared};
+use crate::plugin::policy::Unsettled;
 use crate::plugin::providers::ProviderWait;
 use crate::plugin::{self, Launch, Providers};
 use crate::project::{self, Manifest};
@@ -39,6 +40,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// What a program's files are read through: an editor's buffer when one
 /// is open, else the disk.
@@ -553,13 +555,23 @@ pub struct Options<'a> {
     pub settle: Option<Settle>,
 }
 
-/// Before a provider is configured from the outputs of the deployments
-/// named (as the program names them, `platform[env=lab]`), their plans
-/// settle them: what the evaluation read of them is what their plans make
-/// known, else an error (the run is planned again over the plans'). A
-/// provider is never configured from a value its upstream's plan is about
-/// to change: the address of a server it replaces.
-pub type Settle = Rc<dyn Fn(&BTreeSet<String>) -> Result<()>>;
+/// What settles, for a provider configured from them, the outputs of the
+/// deployments named (as the program names them, `platform[env=lab]`):
+/// their plans, which make known what the evaluation read of them or
+/// other ([`Settles::of`]).
+pub type Settle = Rc<dyn Settles>;
+
+/// [`Settle`].
+pub trait Settles {
+    /// The outputs of `names` a provider is configured from: settled as the
+    /// run read them (`None`); not yet (what settles them, the provider
+    /// configured from them provisionally while their plans go:
+    /// `plugin::policy::Unsettled`); an error when one was not planned or
+    /// its plan makes other known (the run is planned again over the
+    /// plans'). A provider's calls never go on against a value its
+    /// upstream's plan changes: the address of a server it replaces.
+    fn of(&self, names: BTreeSet<String>) -> Result<Option<Arc<dyn Unsettled>>>;
+}
 
 impl<'a> Options<'a> {
     /// Nothing given, nothing checked beyond evaluating.
@@ -739,17 +751,20 @@ impl Evaluator {
     }
 
     /// Each provider whose settings `res` makes known, and changed,
-    /// configured ([`Providers::configure_from`]); in a tree, once what
-    /// the settings read of the other deployments is settled
-    /// ([`Settle`]).
+    /// configured ([`Providers::configure_from`]); in a tree, one whose
+    /// settings read other deployments' outputs not settled yet,
+    /// provisionally ([`Settle`]).
     fn configure(&self, res: &EvalResult) -> Result<Vec<String>> {
+        let mut provisional = BTreeMap::new();
         if let Some(settle) = &self.settle {
-            let upstreams = settings_upstreams(res);
-            if !upstreams.is_empty() {
-                settle(&upstreams)?;
+            for (provider, upstreams) in settings_upstreams(res) {
+                if let Some(unsettled) = settle.of(upstreams)? {
+                    provisional.insert(provider, unsettled);
+                }
             }
         }
-        self.backend.configure_from(agreed(&res.facts))
+        self.backend
+            .configure_from(agreed(&res.facts), &provisional)
     }
 
     /// The program evaluated from the start; each provider whose settings
@@ -1524,15 +1539,16 @@ fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
 }
 
 /// The other deployments of the tree whose outputs a provider's settings
-/// are made from, as the program names them (`platform[env=lab]`).
-fn settings_upstreams(res: &EvalResult) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    settings_rest_on(res, |_, fact| {
+/// are made from, as the program names them (`platform[env=lab]`), by
+/// the program's name of the provider.
+fn settings_upstreams(res: &EvalResult) -> BTreeMap<String, BTreeSet<String>> {
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    settings_rest_on(res, |name, fact| {
         if let ("attr", [Value::Str(typ), Value::Str(n), ..]) =
             (fact.pred.name(), fact.args.as_slice())
             && typ == transform::OUTPUT
         {
-            out.insert(n.clone());
+            out.entry(name.to_string()).or_default().insert(n.clone());
         }
     });
     out

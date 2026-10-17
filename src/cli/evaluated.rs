@@ -777,10 +777,10 @@ impl Context {
                 .unwrap_or_default(),
             destroy: cmd.destroys(),
             secrets: self.secrets.clone(),
-            // A deployment of a tree configures no provider from what
-            // another's plan has not settled (`board`).
+            // A deployment of a tree configures a provider from what
+            // another's plan has not settled provisionally (`board`).
             settle: self.cli.upstreams.clone().map(|up| {
-                let settle: deployment::Settle = std::rc::Rc::new(move |names| up.settle(names));
+                let settle: deployment::Settle = std::rc::Rc::new(up);
                 settle
             }),
         })

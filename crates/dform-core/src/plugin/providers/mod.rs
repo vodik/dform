@@ -333,9 +333,12 @@ impl Providers {
         self.link(i)?.borrow_mut().call(self.sessions[i], call)
     }
 
-    /// Start `call` on link `i`, in these providers' session of it.
+    /// Start `call` on link `i`, in these providers' session of it, once
+    /// a provisional link may send it ([`Link::settled`]).
     fn submit(&self, i: usize, call: impl Into<Call>) -> Result<Ticket> {
-        Ok(self.link(i)?.borrow_mut().submit(self.sessions[i], call))
+        let mut link = self.link(i)?.borrow_mut();
+        link.settled(self.sessions[i])?;
+        Ok(link.submit(self.sessions[i], call))
     }
 
     /// Configure these providers' session of link `i` again, with

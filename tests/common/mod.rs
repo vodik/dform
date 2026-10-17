@@ -899,6 +899,30 @@ pub fn traced(s: &Scratch, args: &[&str]) -> (Run, Vec<serde_json::Value>) {
     (run, spans)
 }
 
+/// A server that answers its first request 200 after `first`, each after
+/// it after `then`, one at a time: what a mock's Plan call waits on
+/// (`DFORM_TEST_FAKE_PLAN_AWAITS`).
+pub fn answering_after(first: std::time::Duration, then: std::time::Duration) -> u16 {
+    use std::io::{BufRead, BufReader, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for (n, mut conn) in l.incoming().flatten().enumerate() {
+            let mut r = BufReader::new(conn.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            std::thread::sleep(if n == 0 { first } else { then });
+            let _ = conn
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        }
+    });
+    port
+}
+
 /// A registry that answers a manifest's HEAD only once `n` are asked at
 /// once (within `budget`; else 503): each tag's digest is `sha256:` and
 /// its first letter, 64 times.

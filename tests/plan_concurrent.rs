@@ -289,36 +289,14 @@ fn a_refused_upstream_stops_its_reader_with_its_own_message() {
     assert_eq!(said(&r.stderr), said(&alone.stderr));
 }
 
-/// A server that answers each request 200 after `delay`: what platform's
-/// Plan call waits on (`DFORM_TEST_FAKE_PLAN_AWAITS`).
-fn answering_after(delay: std::time::Duration) -> u16 {
-    use std::io::{BufRead, BufReader, Write};
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for mut conn in l.incoming().flatten() {
-            let mut r = BufReader::new(conn.try_clone().unwrap());
-            loop {
-                let mut line = String::new();
-                if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                    break;
-                }
-            }
-            std::thread::sleep(delay);
-            let _ = conn
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
-        }
-    });
-    port
-}
-
 /// Apps waits for platform's plan, whose Plan call takes 5 s, before
 /// it says what it read: the wait is a span of apps' deployment, named
 /// for the one it waits on and what for (`until`), never a gap in the
 /// trace.
 #[test]
 fn a_reader_s_wait_on_its_upstream_is_a_span_of_its_own() {
-    let port = answering_after(std::time::Duration::from_secs(5));
+    let five = std::time::Duration::from_secs(5);
+    let port = common::answering_after(five, five);
     let s = project("plan-concurrent-wait");
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
     std::os::unix::fs::symlink(

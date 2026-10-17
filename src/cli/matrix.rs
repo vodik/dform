@@ -601,6 +601,9 @@ impl Tree<'_> {
             dep.upstreams = Some(up.clone());
             let result = run_deployment(dep.clone(), &m.d.full);
             match up.verdict() {
+                // A call against what was not settled failed, and it
+                // settled as read: made again, its calls as any.
+                Verdict::Stands if result.is_err() && up.failed_provisionally() => continue,
                 Verdict::Stands => {
                     let ran = Ran {
                         result,

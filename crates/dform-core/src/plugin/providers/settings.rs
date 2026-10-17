@@ -4,12 +4,14 @@
 
 use super::Providers;
 use crate::ast::{Atom, Term};
+use crate::plugin::policy::Unsettled;
 use crate::provider::{self};
 use crate::secrets::held;
 use crate::value::{NullClass, Value};
 use anyhow::{Context, Result};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// The settings the program last configured a link with: as they are
 /// kept to tell a change ([`Providers::settings_of`]: a secret as its
@@ -35,10 +37,12 @@ impl Providers {
     /// settings go to the provider in that call and are kept here only to
     /// tell a change, a revealed secret as its label and where it is held
     /// (never written, printed or digested: a kubeconfig may be among
-    /// them).
+    /// them). One `provisional` names is configured from what is not
+    /// settled yet ([`crate::plugin::link::Link::set_provisional`]).
     pub fn configure_from<'a>(
         &self,
         facts: impl IntoIterator<Item = &'a Atom>,
+        provisional: &BTreeMap<String, Arc<dyn Unsettled>>,
     ) -> Result<Vec<String>> {
         let facts: Vec<&Atom> = facts.into_iter().collect();
         // The object each address maps to, for a secret its attribute holds.
@@ -80,6 +84,9 @@ impl Providers {
                 .with_context(|| format!("configure provider {name}"))?;
             let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
             config["settings"] = settings;
+            self.link(i)?
+                .borrow_mut()
+                .set_provisional(self.sessions[i], provisional.get(name).cloned());
             let account = self
                 .configure_link(i, config)
                 .with_context(|| format!("configure provider {name} from provider_config"))?;

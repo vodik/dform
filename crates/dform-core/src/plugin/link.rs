@@ -7,17 +7,19 @@
 //! ([`Link::take_events`]). Every call has the link's timeout ([`Timed`]), and a blocking
 //! call that failed in a way worth trying again is retried with backoff
 //! (R-81, [`super::policy`]); an Apply is the executor's to retry
-//! (`providers::Tick`).
+//! (`providers::Tick`). A link configured from what is not settled yet is
+//! provisional ([`Link::set_provisional`]).
 
 use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Session, Ticket, VERSION};
 use super::credentials::{self, Holding, Kind, Secret};
 use super::pb;
-use super::policy::{self, Class, Policy};
+use super::policy::{self, Class, Policy, Unsettled};
 use super::timed::Timed;
 use super::wire;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Link {
@@ -69,6 +71,20 @@ pub struct Link {
     /// What each call in flight whose answer is renamed named
     /// ([`super::wire::Names::answered_by`]).
     answers: BTreeMap<Ticket, String>,
+    /// The sessions configured from what is not settled yet.
+    provisional: BTreeMap<Session, Provisional>,
+    /// The calls in flight of those sessions, each with its session.
+    unsettled: BTreeMap<Ticket, Session>,
+}
+
+/// A session configured from what is not settled yet
+/// ([`Link::set_provisional`]).
+struct Provisional {
+    unsettled: Arc<dyn Unsettled>,
+    /// A call of it was answered: the first contact is made.
+    contacted: bool,
+    /// A call of it failed: nothing more is sent until it settles.
+    failed: bool,
 }
 
 /// One failed call sent again: for the progress line and the audit log.
@@ -149,6 +165,8 @@ impl Link {
             typed: Default::default(),
             names: Default::default(),
             answers: BTreeMap::new(),
+            provisional: BTreeMap::new(),
+            unsettled: BTreeMap::new(),
         };
         let hs: pb::HandshakeResponse = link.call(
             Session::NONE,
@@ -216,6 +234,8 @@ impl Link {
             typed: Default::default(),
             names: self.names.clone(),
             answers: BTreeMap::new(),
+            provisional: BTreeMap::new(),
+            unsettled: BTreeMap::new(),
         }
     }
 
@@ -227,6 +247,78 @@ impl Link {
 
     pub fn policy(&self) -> Policy {
         self.policy
+    }
+
+    /// `session` configured from what is not settled yet (`unsettled`: a
+    /// reader's provider, from the output its upstream last published), or
+    /// from what is (`None`). While it is not, its calls have
+    /// [`policy::FIRST_CONTACT`] at most until one is answered, and once
+    /// one failed nothing more is sent in it until it settles: as read,
+    /// the failed call is sent again under the link's policy; otherwise
+    /// every call fails, as the run is planned again.
+    pub fn set_provisional(&mut self, session: Session, unsettled: Option<Arc<dyn Unsettled>>) {
+        match unsettled {
+            Some(unsettled) => self.provisional.insert(
+                session,
+                Provisional {
+                    unsettled,
+                    contacted: false,
+                    failed: false,
+                },
+            ),
+            None => self.provisional.remove(&session),
+        };
+        self.time_out();
+    }
+
+    /// The link's timeout: [`policy::FIRST_CONTACT`] at most while a
+    /// provisional session has had no answer, else its policy's.
+    fn time_out(&mut self) {
+        let timeout = match self.provisional.values().any(|p| !p.contacted) {
+            true => self.policy.timeout.min(policy::FIRST_CONTACT),
+            false => self.policy.timeout,
+        };
+        self.backend.set_timeout(timeout);
+    }
+
+    /// Whether a call may be sent in `session` now: always, but in a
+    /// provisional session once one of its calls failed, when it settles
+    /// as read, waited for (it is settled from now on, as it is once
+    /// settled anyway). An error when it settled otherwise.
+    pub fn settled(&mut self, session: Session) -> Result<(), CallError> {
+        let Some(p) = self.provisional.get(&session) else {
+            return Ok(());
+        };
+        let settled = match p.failed {
+            true => p.unsettled.settle().map(|()| true),
+            false => p.unsettled.settled(),
+        };
+        match settled {
+            Ok(false) => Ok(()),
+            Ok(true) => {
+                self.set_provisional(session, None);
+                Ok(())
+            }
+            Err(e) => Err(CallError::Refused(format!("{e:#}"))),
+        }
+    }
+
+    /// The answer `r` to a call of the provisional `session`: one answered
+    /// is the first contact made; one that failed stops the session until
+    /// it settles.
+    fn contacted(&mut self, session: Session, r: &Result<Reply, CallError>) {
+        let Some(p) = self.provisional.get_mut(&session) else {
+            return;
+        };
+        match r {
+            Ok(_) => p.contacted = true,
+            Err(_) if !p.failed => {
+                p.failed = true;
+                p.unsettled.failed();
+            }
+            Err(_) => {}
+        }
+        self.time_out();
     }
 
     /// Record a retry of a call to this provider made in `session`, and
@@ -310,12 +402,18 @@ impl Link {
         if let Some(a) = answered {
             self.answers.insert(t, a);
         }
+        if self.provisional.contains_key(&session) {
+            self.unsettled.insert(t, session);
+        }
         t
     }
 
     /// An answer from the backend, its types and attributes as the
     /// program names them.
     fn back(&mut self, t: Ticket, r: Result<Reply, CallError>) -> Result<Reply, CallError> {
+        if let Some(session) = self.unsettled.remove(&t) {
+            self.contacted(session, &r);
+        }
         let typed = self.typed.remove(&t);
         let answered = self.answers.remove(&t);
         let r = match &self.rename {
@@ -393,7 +491,9 @@ impl Link {
     /// One call, its failure classified. A failure worth trying again is
     /// retried with backoff, up to the policy's budget: a transient
     /// refusal, and a timeout of a call that changes nothing (not an
-    /// Apply, whose retries are the executor's).
+    /// Apply, whose retries are the executor's). A provisional link's
+    /// failure is sent again once it settles, not before
+    /// ([`Link::settled`]).
     pub fn try_call<R>(&mut self, session: Session, call: impl Into<Call>) -> Result<R, CallError>
     where
         R: TryFrom<Reply, Error = Reply>,
@@ -402,6 +502,7 @@ impl Link {
         let method = call.method();
         let mut attempt = 0;
         loop {
+            self.settled(session)?;
             let t = self.submit(session, call.clone());
             let e = match self.wait(t) {
                 Ok(reply) => return self.expect(method, reply),
@@ -412,10 +513,13 @@ impl Link {
                 Class::MaybeApplied => !matches!(call, Call::Apply(_)),
                 Class::Final => false,
             };
-            attempt += 1;
             if !again {
                 return Err(e);
             }
+            if self.provisional.contains_key(&session) {
+                continue;
+            }
+            attempt += 1;
             if attempt > self.policy.retries {
                 return Err(gave_up(e, self.policy.retries));
             }

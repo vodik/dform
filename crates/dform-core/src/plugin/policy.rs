@@ -10,6 +10,13 @@
 //! may have taken effect (a timeout, `DEADLINE_EXCEEDED`) is retried only
 //! where sending it again is safe (a Read, a Plan; an Apply only after the
 //! executor has looked, `plugin::providers::Tick`); a crash never.
+//!
+//! A provider configured from what is not settled yet ([`Unsettled`]: a
+//! reader's, from the output its upstream last published, while the
+//! upstream's plan goes) is provisional: its first contact has
+//! [`FIRST_CONTACT`] at most, and a failed call is sent again only once
+//! what it was configured from settles as read; settled otherwise, the
+//! run is planned again over what the plan makes known.
 
 use super::backend::{Call, CallError};
 use std::time::Duration;
@@ -30,6 +37,26 @@ pub struct Policy {
 
 /// The longest delay between two attempts.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// How long a provisional provider's first call may go unanswered: an
+/// endpoint its upstream's plan is about to replace may be a server that
+/// is gone, and costs this, not the policy's timeout and its retries.
+pub const FIRST_CONTACT: Duration = Duration::from_secs(5);
+
+/// What a provider was configured from that is not settled yet: the
+/// outputs of other deployments of the tree, as the run read them before
+/// their plans made them known (`deployment::Settle`).
+pub trait Unsettled: Send + Sync {
+    /// Whether it is settled now as the run read it: `Ok(true)` settled,
+    /// `Ok(false)` not yet, an error when it settled otherwise (the run is
+    /// planned again over what the plans make known) or was not planned.
+    fn settled(&self) -> anyhow::Result<bool>;
+    /// Once it is settled: [`Unsettled::settled`]'s error, else settled.
+    fn settle(&self) -> anyhow::Result<()>;
+    /// A call made provisionally failed: once it settles as read, the run
+    /// is made again, its calls sent under the provider's own policy.
+    fn failed(&self);
+}
 
 impl Default for Policy {
     fn default() -> Policy {
