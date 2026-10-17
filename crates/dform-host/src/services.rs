@@ -11,7 +11,7 @@ use dform_core::plugin::host::{
 };
 use dform_core::plugin::signer::{Material, Signer};
 use dform_core::plugin::timed;
-use dform_core::timing::location;
+use dform_core::timing::{dry_run, location};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -187,7 +187,8 @@ impl Services {
     }
 
     /// `req`, once its bucket's window admits it, sent with `cred`
-    /// through `via`: an `io.call` span (`http`), the child of the
+    /// through `via`: an `io.call` span (`http`), named by its method
+    /// (its location a field, and a dry run said), the child of the
     /// provider call it is sent for while that call is traced, else of
     /// the span the host's thread is in. Its wait for the window is a
     /// `ratelimit.wait` span under it.
@@ -200,11 +201,17 @@ impl Services {
         name = "io.call",
         skip_all,
         fields(
-            otel.name = %format_args!("{} {} {}", self.grants.provider, req.method, location(&req.url)),
+            otel.name = %format_args!(
+                "{} {}{}",
+                self.grants.provider,
+                req.method,
+                if dry_run(&req.url) { " (dry run)" } else { "" }
+            ),
             otel.kind = "client",
             kind = "http",
             provider = self.grants.provider.as_str(),
             addr = %location(&req.url),
+            dry_run = dry_run(&req.url).then_some(true),
             bucket = req.bucket.as_deref(),
             status = tracing::field::Empty,
         )

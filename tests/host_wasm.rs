@@ -575,6 +575,13 @@ fn the_k8s_component_traces_as_its_native_build_does() {
             "requests under {call}: {native:#?}"
         );
     }
+    // A Plan's apply is a dry run, and says so.
+    assert!(
+        native
+            .keys()
+            .any(|(c, r)| c == "k8s Plan" && r.starts_with("k8s PATCH (dry run) https://")),
+        "{native:#?}"
+    );
     assert!(
         native
             .keys()
@@ -660,7 +667,7 @@ fn k8s_component() -> String {
 }
 
 /// Each `io.call` span of a trace by the name of the call it is made for
-/// and its own, and each `ratelimit.wait` span by the call of
+/// and its own with its location, and each `ratelimit.wait` span by the call of
 /// the request that waited, counted: which of a call's requests sent
 /// together wait is the order they reach the host in. Each request's
 /// bucket and each wait's session filled.
@@ -701,7 +708,12 @@ fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(Strin
             under = parent(p);
         }
         let call = under.and_then(|p| p["name"].as_str()).unwrap_or("(none)");
-        *out.entry((call.to_string(), name.to_string())).or_insert(0) += 1;
+        // A request by its method and where it went.
+        let child = match common::attr(sp, "addr") {
+            Some(addr) if request => format!("{name} {addr}"),
+            _ => name.to_string(),
+        };
+        *out.entry((call.to_string(), child)).or_insert(0) += 1;
     }
     out
 }

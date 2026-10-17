@@ -56,8 +56,44 @@ pub fn location(text: &str) -> String {
     format!("{scheme}://{host}{path}")
 }
 
+/// Whether a request to `url` asks its server for a dry run, which
+/// [`location`] does not say: a query parameter `dryRun` (Kubernetes's
+/// `dryRun=All`), `DryRun` or `dry_run`, not `false`.
+pub fn dry_run(url: &str) -> bool {
+    let Some((_, query)) = url.split_once('?') else {
+        return false;
+    };
+    let query = query.split('#').next().unwrap_or_default();
+    query.split('&').any(|pair| {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        k.replace('_', "").eq_ignore_ascii_case("dryrun") && !v.eq_ignore_ascii_case("false")
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    /// A dry run is the query's to say, in any API's spelling of it.
+    #[test]
+    fn a_dry_run_is_its_querys() {
+        for (url, dry) in [
+            ("https://k/api/v1/namespaces/a?dryRun=All", true),
+            (
+                "https://k/api/v1/namespaces/a?fieldManager=dform&dryRun=All",
+                true,
+            ),
+            ("https://ec2/?Action=RunInstances&DryRun=true", true),
+            ("https://x/apply?dry_run", true),
+            ("https://x/apply?dry_run=false", false),
+            ("https://k/api/v1/namespaces/a", false),
+            (
+                "https://k/api/v1/namespaces/a?fieldManager=dform#dryRun=All",
+                false,
+            ),
+        ] {
+            assert_eq!(super::dry_run(url), dry, "{url}");
+        }
+    }
+
     /// A location's credentials are not a span's: userinfo, query and
     /// fragment go; a path or an image reference is as written.
     #[test]

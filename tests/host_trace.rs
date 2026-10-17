@@ -282,9 +282,9 @@ fn the_ovh_components_requests_are_under_its_exports() {
         .filter(|s| common::attr(s, "kind").as_deref() == Some("http"))
         .collect();
     assert!(
-        requests.iter().any(|r| r["name"]
-            .as_str()
-            .is_some_and(|n| n.ends_with("/auth/time"))),
+        requests
+            .iter()
+            .any(|r| common::attr(r, "addr").is_some_and(|a| a.ends_with("/auth/time"))),
         "the signer's fetch of the API's clock: {requests:#?}"
     );
     for r in requests {
