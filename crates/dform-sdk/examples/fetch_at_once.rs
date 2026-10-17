@@ -15,6 +15,7 @@
 //! while one waits. A Read of `web.locked` fetches its `remote` holding
 //! the provider's one lock ([`dform_sdk::sync::Mutex`]): two at once, the
 //! second awaits the lock and is woken by the first's task letting it go.
+//! Its requests are sent once ([`once`]): a 503 is what it measures.
 
 use dform_core::plugin::backend::{Call, Progress, Reply, Session, VERSION};
 use dform_sdk::{CallError, Handler, Request, host, pb};
@@ -35,24 +36,20 @@ impl Handler for FetchAtOnce {
                 ..Default::default()
             })),
             Call::Read(r) if r.r#type == "web.one" => {
-                let answer = host().http.request(Request::get(&r.remote)).await;
+                let answer = host().http.request(once(&r.remote)).await;
                 found(answer.map_err(|e| CallError::Refused(e.message))?.status == 200)
             }
             Call::Read(r) if r.r#type == "web.locked" => {
                 let _held = LOCK.get_or_init(Default::default).lock().await;
-                let answer = host().http.request(Request::get(&r.remote)).await;
+                let answer = host().http.request(once(&r.remote)).await;
                 found(answer.map_err(|e| CallError::Refused(e.message))?.status == 200)
             }
             Call::Read(r) if r.r#type == "web.blocked" => {
-                let answer = dform_sdk::block_on(host().http.request(Request::get(&r.remote)));
+                let answer = dform_sdk::block_on(host().http.request(once(&r.remote)));
                 found(answer.map_err(|e| CallError::Refused(e.message))?.status == 200)
             }
             Call::Read(r) => {
-                let get = |p: &str| {
-                    host()
-                        .http
-                        .request(Request::get(format!("{}/{p}", r.remote)))
-                };
+                let get = |p: &str| host().http.request(once(format!("{}/{p}", r.remote)));
                 let (a, b) = dform_sdk::join(get("a"), get("b")).await;
                 let mut both = true;
                 for answer in [a, b] {
@@ -73,3 +70,9 @@ fn found(found: bool) -> Result<Reply, CallError> {
 }
 
 dform_sdk::provider!(FetchAtOnce);
+
+/// A GET the host sends once: not idempotent, so a 503 (the probe's
+/// server saying a request came alone) is the answer, never retried.
+fn once(url: impl Into<String>) -> Request {
+    Request::get(url).idempotent(false)
+}

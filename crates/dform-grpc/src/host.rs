@@ -95,6 +95,7 @@ pub fn request(r: h::SendRequest) -> (HttpRequest, Option<u64>, Option<u64>) {
             session: Session(r.session),
             // In the call's metadata, not its message (`traced`).
             call: None,
+            idempotent: r.idempotent,
         },
         r.auth,
         r.via,
@@ -114,6 +115,7 @@ pub fn from_request(r: HttpRequest, auth: Option<u64>, via: Option<u64>) -> h::S
         via,
         bucket: r.bucket,
         session: r.session.0,
+        idempotent: r.idempotent,
     }
 }
 

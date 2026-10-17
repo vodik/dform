@@ -48,15 +48,20 @@ What the host guarantees a request:
   stall of the connection, waits out a `Retry-After`, and never passes
   the streams the server takes at once;
 - a request the connection lost before the server took it, sent again
-  on a new one; a call that failed `retryable`, sent again by dform's
+  on a new one; an idempotent request (`request.idempotent`: a GET, a
+  dry run, as the SDK sets it from the method unless told) sent again
+  on a transport failure, a 429 or a 5xx, after a pause doubled each
+  time and its turn in the window, three times at most (`retries` on
+  its span); a call that failed `retryable`, sent again by dform's
   retry policy;
 - a timeout (60s unless the request says), and a span in the run's
   trace under the call it is made for.
 
 What a provider author may assume, and leave to it: no sockets, no
 client to configure, no credential values (a handle names one), no
-retries of its own beyond classifying its errors (a 429 comes back as
-the server answered it; sent again, it waits its turn), no rates: it
+retries of its own (an idempotent request is the host's to send again;
+another's 429 comes back as the server answered it, for the provider to
+classify), no rates: it
 names its limits (`Request::bucket("ec2.describe")`) and the window
 learns them. What a call awaits is the call's (paced in its session's
 windows, traced under its span), however many it awaits together; a

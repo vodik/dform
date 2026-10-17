@@ -251,6 +251,7 @@ impl Outgoing {
                 .collect(),
             body: body.to_vec(),
             timeout: options.and_then(|o| o.first_byte_timeout),
+            idempotent: h::HttpRequest::idempotent_method(head.method.as_str()),
             ..h::HttpRequest::default()
         })
     }
@@ -461,6 +462,7 @@ impl<U> wh::http::HostWithStore<U> for HasSelf<State> {
             session: Session(req.session),
             // Its span's parent is the export's it is sent in.
             call: None,
+            idempotent: req.idempotent,
         };
         let r = waited(span, move || host.send(req, auth, via))
             .await

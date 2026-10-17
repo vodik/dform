@@ -23,6 +23,14 @@ use std::time::{Duration, SystemTime};
 /// its way.
 const RENEW_BEFORE: Duration = Duration::from_secs(10);
 
+/// How many times an idempotent request is sent again
+/// ([`Services::request`]).
+const RETRIES: u32 = 3;
+/// The pause before an idempotent request's first retry, doubled each
+/// time; its bucket's window paces it beside (a 429 halves it, a
+/// `Retry-After` pauses it).
+const BACKOFF: Duration = Duration::from_millis(100);
+
 /// One provider's host: its grants and clients, which its calls only
 /// read, and the credentials it opened and the tunnels it forwarded, by
 /// handle. Its calls run at once (R-142): the handles are locked only to
@@ -201,12 +209,15 @@ impl Services {
         })
     }
 
-    /// `req`, once its bucket's window admits it, sent with `cred`
-    /// through `via`: an `io.call` span (`http`), named by its method
-    /// (its location a field, and `dry_run` when it is one), the child of the
-    /// provider call it is sent for while that call is traced, else of
-    /// the span the host's thread is in. Its wait for the window is a
-    /// `ratelimit.wait` span under it.
+    /// `req`, once its bucket's window admits it, signed and sent with
+    /// `cred` through `via`: an `io.call` span (`http`), named by its
+    /// method (its location a field, and `dry_run` when it is one), the
+    /// child of the provider call it is sent for while that call is
+    /// traced, else of the span the host's thread is in. Its wait for the
+    /// window is a `ratelimit.wait` span under it. An idempotent one is
+    /// sent again ([`again`]) at most [`RETRIES`] times, each signed
+    /// afresh and waiting its turn in the window, after [`BACKOFF`]
+    /// doubled each time: its span's `retries`.
     // `parent` before `target`: tracing-attributes 0.1 takes a `parent`
     // after it for a second one.
     #[tracing::instrument(
@@ -224,6 +235,7 @@ impl Services {
             dry_run = dry_run(&req.url).then_some(true),
             bucket = req.bucket.as_deref(),
             status = tracing::field::Empty,
+            retries = tracing::field::Empty,
         )
     )]
     fn request(
@@ -232,13 +244,26 @@ impl Services {
         cred: Option<&Credential>,
         via: Option<SocketAddr>,
     ) -> Result<HttpResponse, Error> {
-        let admitted = self.limiter.acquire(req.session, req.bucket.as_deref());
-        let x = http::exchange(req, cred, via);
-        admitted.answered(&x);
-        if let Ok(r) = &x.answer {
-            tracing::Span::current().record("status", r.status);
+        let mut retries = 0;
+        loop {
+            let sent = match cred {
+                Some(c) => self.signing(req.clone(), c)?,
+                None => req.clone(),
+            };
+            let admitted = self.limiter.acquire(req.session, req.bucket.as_deref());
+            let x = http::exchange(sent, cred, via);
+            admitted.answered(&x);
+            if req.idempotent && retries < RETRIES && again(&x.answer) {
+                std::thread::sleep(BACKOFF * 2u32.pow(retries));
+                retries += 1;
+                tracing::Span::current().record("retries", retries);
+                continue;
+            }
+            if let Ok(r) = &x.answer {
+                tracing::Span::current().record("status", r.status);
+            }
+            return x.answer;
         }
-        x.answer
     }
 }
 
@@ -284,6 +309,16 @@ impl Services {
     }
 }
 
+/// Whether an idempotent request answered `answer` is sent again: it
+/// failed in transport (refused, reset, timed out), or the server was
+/// busy (a 429) or failed (a 5xx).
+fn again(answer: &Result<HttpResponse, Error>) -> bool {
+    match answer {
+        Ok(r) => r.status == 429 || (500..600).contains(&r.status),
+        Err(e) => e.class != dform_core::plugin::host::Class::Final,
+    }
+}
+
 /// Where on `on` a span says an SSH call goes: `ssh://HOST[:PORT]PATH`,
 /// without the user.
 fn ssh_location(on: &Target, path: &str) -> String {
@@ -323,10 +358,6 @@ impl Calls for Services {
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error> {
         let (cred, via) = self.held(auth, via)?;
-        let req = match &cred {
-            Some(c) => self.signing(req, c)?,
-            None => req,
-        };
         self.request(req, cred.as_deref(), via)
     }
 
@@ -673,6 +704,46 @@ mod tests {
         };
         assert_eq!(sent(None), ["Bearer t1", "Bearer t1"]);
         assert_eq!(sent(Some(0)), ["Bearer renewed", "Bearer renewed"]);
+    }
+
+    /// Retries are the host's: an idempotent GET the server answers 503
+    /// once is sent again and answered; a POST is answered the 503, for
+    /// the provider to classify; a GET that keeps failing is sent four
+    /// times in all.
+    #[test]
+    fn the_host_sends_an_idempotent_request_again_and_no_other() {
+        let server = Server::http1();
+        let seen = Arc::new(Mutex::new(std::collections::BTreeMap::<String, u32>::new()));
+        let counts = seen.clone();
+        server.answer(move |s| {
+            let mut c = counts.lock().unwrap();
+            let n = c.entry(format!("{} {}", s.method, s.path)).or_default();
+            *n += 1;
+            match (*n, s.path.as_str()) {
+                (1, _) | (_, "/down") => (503, Vec::new(), b"busy".to_vec()),
+                _ => (200, Vec::new(), b"ok".to_vec()),
+            }
+        });
+        let host = Services::new(Grants::none("p"));
+        let send = |method: &str, path: &str| {
+            let req = HttpRequest {
+                method: method.into(),
+                url: server.url(path),
+                idempotent: HttpRequest::idempotent_method(method),
+                ..HttpRequest::default()
+            };
+            host.send(req, None, None).unwrap().status
+        };
+        assert_eq!(send("GET", "/a"), 200);
+        assert_eq!(send("POST", "/b"), 503);
+        assert_eq!(send("GET", "/down"), 503);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            [("GET /a", 2), ("GET /down", 1 + RETRIES), ("POST /b", 1)]
+                .map(|(k, n)| (k.to_string(), n))
+                .into()
+        );
     }
 
     /// A signer whose token is what a command prints.

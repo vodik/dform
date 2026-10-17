@@ -461,6 +461,7 @@ impl Request {
             req: HttpRequest {
                 method: method.to_string(),
                 url: url.into(),
+                idempotent: HttpRequest::idempotent_method(method),
                 ..HttpRequest::default()
             },
             ..Request::default()
@@ -513,6 +514,16 @@ impl Request {
 
     pub fn timeout(mut self, d: Duration) -> Request {
         self.req.timeout = Some(d);
+        self
+    }
+
+    /// Whether sending it twice is sending it once: by default its
+    /// method's (`GET`, `HEAD`, `OPTIONS`), and so for one the API makes
+    /// so (a dry run, a PUT of a whole object). The host sends an
+    /// idempotent request again on a transport failure, a 429 or a 5xx;
+    /// a provider never loops on a failure.
+    pub fn idempotent(mut self, idempotent: bool) -> Request {
+        self.req.idempotent = idempotent;
         self
     }
 

@@ -17,9 +17,9 @@
 //! an API's calls (TCP's additive increase and multiplicative decrease;
 //! Netflix's concurrency-limits, Envoy's adaptive concurrency, the AWS
 //! SDK's adaptive retry mode). A `Retry-After` pauses the bucket that
-//! long. The request that was throttled is answered to the provider as
-//! the server answered it: its retry is the provider's, and waits its
-//! turn here. Requests wait in the order they came; a wait is a
+//! long. A throttled request that is idempotent is sent again by the host
+//! (`services::Services::request`), waiting its turn here; one that is
+//! not is answered to the provider as the server answered it. Requests wait in the order they came; a wait is a
 //! `ratelimit.wait` span. A window never passes the streams the server
 //! takes at once on its connection (HTTP/2's
 //! `SETTINGS_MAX_CONCURRENT_STREAMS`, as each answer tells it), nor

@@ -119,6 +119,13 @@ interface http {
     // the provider): each session's buckets are paced apart. 0: none, a
     // request outside a call.
     session: u64,
+    // Sending it twice is sending it once (a GET, a dry run): the host
+    // sends it again on a transport failure, a 429 or a 5xx, at the
+    // window's pace and a few times at most, and the request's span
+    // counts the times (`retries`). Retries are the host's: a provider
+    // never loops on a failure; one that is not idempotent comes back as
+    // the server answered it, for the provider to classify.
+    idempotent: bool,
   }
 
   record response {

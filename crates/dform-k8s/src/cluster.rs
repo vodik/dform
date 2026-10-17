@@ -539,10 +539,12 @@ impl Cluster {
             path += "&dryRun=All";
         }
         let body = serde_json::to_vec(obj).map_err(|e| WriteError::Other(e.into()))?;
+        // A dry run persists nothing: the host may send it again.
         let req = self
             .request("PATCH", &path, "patch", &kind.plural)
             .header("content-type", "application/apply-patch+yaml")
-            .body(body);
+            .body(body)
+            .idempotent(dry_run);
         self.json(req).await.map_err(write_error)
     }
 

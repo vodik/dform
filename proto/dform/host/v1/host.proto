@@ -148,6 +148,9 @@ message SendRequest {
   // provider): each session's buckets are paced apart. 0: none, a request
   // outside a call.
   uint64 session = 9;
+  // Sending it twice is sending it once (a GET, a dry run): the host
+  // sends it again on a transport failure, a 429 or a 5xx.
+  bool idempotent = 10;
 }
 
 message SendResponse {

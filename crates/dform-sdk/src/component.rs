@@ -302,6 +302,7 @@ pub(crate) mod waits {
                     .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX)),
                 bucket: req.bucket,
                 session: req.session.0,
+                idempotent: req.idempotent,
             },
             auth.as_deref(),
             via.as_deref(),

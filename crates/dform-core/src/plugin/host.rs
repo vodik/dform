@@ -135,6 +135,20 @@ pub struct HttpRequest {
     /// (`super::timed::call_span`): the host's span of the request is
     /// that call's child. None: the call is not traced, or there is none.
     pub call: Option<u64>,
+    /// Sending it twice is sending it once (a GET, a dry run): the host
+    /// sends it again on a transport failure, a 429 or a 5xx, at the
+    /// window's pace, a few times at most; one that is not is the
+    /// provider's to classify.
+    pub idempotent: bool,
+}
+
+impl HttpRequest {
+    /// Whether a request of `method` is idempotent by its method alone
+    /// (`GET`, `HEAD`, `OPTIONS`): the SDK's default, which a provider
+    /// overrides for one its API makes so (a dry run).
+    pub fn idempotent_method(method: &str) -> bool {
+        matches!(method, "GET" | "HEAD" | "OPTIONS")
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
