@@ -5279,7 +5279,7 @@ key inputs' enum types). After a selection the server sends the
 notification `dform/environment` with `{label, deployments}`
 (`deployments`: `dform[env=prod]`), for a mode line.
 
-## Testing
+## Testing dform itself
 
 `cargo test` runs the integration tests under `tests/` (one file per
 concern: adoption, chaos, k8s, aws, ...) and every crate's own tests.
@@ -5449,15 +5449,15 @@ locations) and counts them; it never holds a value.
 
 ## Status
 
-This is an MVP:
-
-- semi-naive evaluator with hash indexes (see Performance)
 - functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read`, and `oci.resolve`, a tag pinned to its digest (the coeffects); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
-- safe(ish) negation: `not` requires the atom be ground at evaluation time
+- negation: `not` requires the atom be ground at evaluation time
 
-Provider model (in progress): the demo uses the mock provider, `dform __provider fake`, a
-separate process behind the plugin protocol (tests and benches may link it in
-instead, `dform-direct`) that supplies schema facts
-(`providers/<name>/schema.df`) and discovery facts (inventory), and supports plan/apply
-against a world file, with chaos injection.
+The evaluator is semi-naive with hash indexes (see "Performance"). Providers
+run behind the plugin protocol as their own processes, native executables or
+wasm components ("Providers are processes; the mock plays schema files"):
+the k8s, OVH, Postgres and Tailscale providers ship in this repository
+alongside the mock, `dform __provider fake` (or `dform-direct`, linked
+in, which tests and benches use), which supplies schema facts
+(`providers/<name>/schema.df`) and discovery facts (inventory), and
+supports plan/apply against a world file, with chaos injection.
