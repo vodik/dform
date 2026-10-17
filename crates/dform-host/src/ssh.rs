@@ -3,12 +3,12 @@
 //! R-151), `write`, `forward`. A host's file is read through `files`
 //! (`ssh://USER@HOST/PATH`, `dform_core::files::ssh`, R-153), not here.
 //!
-//! TODO: wire these to `dform_core::files::ssh`'s session (its host-key
-//! check against the run's known hosts, its key order): exec with argv
-//! (quoted for the remote shell, which SSH's exec request always goes
-//! through) and stdin; SFTP write with a mode; a direct-tcpip channel
-//! behind a local listener for `forward`. No provider's apply calls them
-//! yet; until one does every call is refused naming this.
+//! Each call is refused, naming this module: no provider's apply calls
+//! them. The implementation they wait for is `dform_core::files::ssh`'s
+//! session (its host-key check against the run's known hosts, its key
+//! order): exec with argv (quoted for the remote shell, which SSH's exec
+//! request always goes through) and stdin; SFTP write with a mode; a
+//! direct-tcpip channel behind a local listener for `forward`.
 
 use dform_core::plugin::host::{Endpoint, Error, Failure, Run, Target};
 use std::net::SocketAddr;

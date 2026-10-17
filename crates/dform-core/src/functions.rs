@@ -25,10 +25,9 @@
 //! up by the qualified name ([`apply`]); a test keeps the two in step.
 //!
 //! The format is self-contained text (DESIGN.org R-24: a function package
-//! embeds its signature file), read for now by this module rather than by
-//! the program parser. When R-24 embeds these files in packages, the
-//! program parser takes the format over (a non-program mode) and this
-//! reader goes.
+//! embeds its signature file), and this module is its reader. A package
+//! that embeds its signature file (R-24) is read by the program parser in
+//! a non-program mode, which replaces this reader.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
