@@ -1221,7 +1221,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             t.split('|').next() == Some(SET_DOC)
         }))
     };
-    let stack = program.stack;
+    let (stack, nodes) = (program.stack, program.nodes);
     let (docs, mut out): (Vec<Stmt>, Vec<Stmt>) = program
         .statements
         .into_iter()
@@ -1419,7 +1419,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
     Program {
         statements: out,
         stack,
-        nodes: None,
+        nodes,
     }
 }
 

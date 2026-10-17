@@ -12,10 +12,14 @@ pub struct Program {
     /// written in a program (`stack::config`). `None` for a program that
     /// is not a stack's.
     pub stack: Option<Config>,
-    /// The program's nodes (R-211), when the resolver made it: its first
-    /// statements are what they lower to, the rest what a run added after
-    /// them (an input file's facts, the policy rules, declared externs).
-    /// `None` for a program written as statements, or made by a pass.
+    /// The program's nodes (R-211), when the resolver made it: what its
+    /// statements are lowered from. Before expansion its first statements
+    /// are what the nodes lower to, the rest what a run added after them
+    /// (an input file's facts, the policy rules, declared externs); every
+    /// pass after (expansion, `transform`) keeps them, so what a later
+    /// pass needs of a statement it reads from its node, never from a
+    /// fact the lowering writes for it. `None` for a program written as
+    /// statements.
     pub nodes: Option<std::rc::Rc<crate::program::Program>>,
 }
 

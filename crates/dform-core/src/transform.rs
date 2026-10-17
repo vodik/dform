@@ -433,7 +433,7 @@ fn lower_contributions(program: &Program) -> Result<Program> {
     Ok(Program {
         stack: program.stack.clone(),
         statements: base_reads(out),
-        nodes: None,
+        nodes: program.nodes.clone(),
     })
 }
 
@@ -686,7 +686,7 @@ fn desugar_comprehensions(program: &Program) -> Result<Program> {
         current = Program {
             statements: next_stmts,
             stack: current.stack.clone(),
-            nodes: None,
+            nodes: current.nodes.clone(),
         };
 
         if !changed {
@@ -1186,7 +1186,7 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
         Program {
             statements,
             stack: program.stack.clone(),
-            nodes: None,
+            nodes: program.nodes.clone(),
         },
         externs,
         fns,
@@ -1213,7 +1213,7 @@ fn desugar_resources(program: &Program) -> Result<Program> {
     Ok(Program {
         statements: out,
         stack: program.stack.clone(),
-        nodes: None,
+        nodes: program.nodes.clone(),
     })
 }
 

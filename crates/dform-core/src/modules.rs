@@ -532,7 +532,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
     cx.finish(Program {
         statements: expanded,
         stack: program.stack.clone(),
-        nodes: None,
+        nodes: program.nodes.clone(),
     })
 }
 
