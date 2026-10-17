@@ -215,7 +215,7 @@ impl Lowerer<'_> {
                         let def = self.names(scope).function(f)?.clone();
                         Some(Called {
                             rel: format!("{m}::{f}"),
-                            via: Reach::Own,
+                            via: self.use_reach(rc.scope, m),
                             scope,
                             def,
                         })

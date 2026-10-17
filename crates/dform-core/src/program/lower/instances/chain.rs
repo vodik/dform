@@ -172,7 +172,7 @@ impl Chain {
                     .as_ref()
                     .expect("a copy through a module");
                 (
-                    format!("{}::{name}", via.name),
+                    private_name(&via.name, name),
                     Some(From::at(i, Stage::Named)),
                 )
             }

@@ -278,23 +278,48 @@ impl Lowerer<'_> {
 
     /// The module instance the component `component`, written `written`
     /// in `scope`, is named through (R-186): `a.volume` under `use backups
-    /// as a`, the component an item of that module. Its body reads that
-    /// instance's items bare.
+    /// as a`, the component an item of that module; by its path,
+    /// `modules.lan.vpc`, the instance the one `use` of its module in
+    /// scope binds. Its body reads that instance's items bare.
     pub(super) fn via(&self, scope: ScopeId, written: &str, component: &str) -> Option<Via> {
         let (head, _) = written.split_once('.')?;
         let (parent, _) = component.rsplit_once('.')?;
         let declared = self.chain_of(scope).into_iter().find(|s| {
             let sc = self.names(*s);
             sc.component(head).is_some() || sc.module(head).is_some()
-        })?;
-        if self.names(declared).module(head)? != parent {
-            return None;
-        }
+        });
+        let (declared, name) = match declared {
+            Some(d) if self.names(d).module(head).is_some_and(|m| m == parent) => {
+                (d, head.to_string())
+            }
+            _ if written == component => self.use_of(scope, parent)?,
+            _ => return None,
+        };
         Some(Via {
             module: parent.to_string(),
-            name: head.to_string(),
+            name,
             absolute: !self.own_scopes(scope).contains(&declared),
         })
+    }
+
+    /// The one `use` of the module `path` in `scope`, looked up outward:
+    /// the scope that declares it and the name it binds. `None` when no
+    /// scope has one, or the nearest has several (`use nodes as a`, `use
+    /// nodes as b`), which a copy by the path does not choose between.
+    fn use_of(&self, scope: ScopeId, path: &str) -> Option<(ScopeId, String)> {
+        let uses = |s: ScopeId| -> Vec<String> {
+            let of = self.names(s).uses().filter(|(_, p)| *p == path);
+            of.map(|(n, _)| n.clone()).collect()
+        };
+        let (s, names) = self
+            .chain_of(scope)
+            .into_iter()
+            .map(|s| (s, uses(s)))
+            .find(|(_, names)| !names.is_empty())?;
+        match <[String; 1]>::try_from(names) {
+            Ok([name]) => Some((s, name)),
+            Err(_) => None,
+        }
     }
 
     /// One copy of the component `module`, named `name`, its inputs the

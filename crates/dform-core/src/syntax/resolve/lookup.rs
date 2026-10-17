@@ -89,8 +89,9 @@ impl Lowerer<'_> {
     /// An instance's scope `name`, written at `span`, as a read in `scope`
     /// of what `declared` declares reaches it: the name itself when the
     /// copy is the body's own (the copies being instanced put the body's
-    /// scope in front of it), else as a scope no copy of the body is taken
-    /// from reaches it (`Reach::Absolute`).
+    /// scope in front of it), an enclosing definition's through the
+    /// instance the copy is taken from (`lexical`, R-186), else as a scope
+    /// no copy of the body is taken from reaches it (`Reach::Absolute`).
     pub(super) fn scoped(
         &mut self,
         scope: ScopeId,
@@ -98,19 +99,20 @@ impl Lowerer<'_> {
         name: ExprId,
         span: Span,
     ) -> ExprId {
-        match self.own_scopes(scope).contains(&declared) {
-            true => name,
-            false => {
-                let via = Reach::Absolute;
-                self.node(span, ExprKind::Scoped { name, via })
-            }
+        if self.own_scopes(scope).contains(&declared) {
+            return name;
         }
+        let via = match self.lexical(scope, declared) {
+            Some(body) if !body.is_empty() => Reach::Lexical(body),
+            _ => Reach::Absolute,
+        };
+        self.node(span, ExprKind::Scoped { name, via })
     }
 
     /// The address of the resource `name` in scope, as a read in `scope`
     /// writes it, at `span`: the body's own is relative (expansion scopes
-    /// it), its user's reached as written (`scoped`), an enclosing body's
-    /// its instance's (`lexical`).
+    /// it), its user's reached as written, an enclosing body's its
+    /// instance's (`scoped`).
     pub(super) fn resource_addr(&mut self, scope: ScopeId, name: &str, span: Span) -> ExprId {
         self.resource_addr_from(scope, scope, name, span)
     }
@@ -131,13 +133,7 @@ impl Lowerer<'_> {
             .unwrap_or(from);
         let segment = crate::address::name_segment(name);
         let seg = self.node(span, ExprKind::Lit(Value::Str(segment.into_owned())));
-        match self.lexical(scope, declared) {
-            Some(body) if !body.is_empty() => {
-                let via = Reach::Lexical(body);
-                self.node(span, ExprKind::Scoped { name: seg, via })
-            }
-            _ => self.scoped(scope, declared, seg, span),
-        }
+        self.scoped(scope, declared, seg, span)
     }
 
     /// The definition whose body `declared` is, when a read in `scope`
@@ -184,6 +180,26 @@ impl Lowerer<'_> {
             Some(body) => Reach::Lexical(body),
             None => Reach::Own,
         }
+    }
+
+    /// The enclosing definition whose `use` binds the module `m` a read
+    /// in `scope` names, when the `use` is past the body the read is in
+    /// (R-186): a component reads the modules its file uses, as it reads
+    /// the file's lets, through the instance the copy is taken from.
+    /// `None` for the body's own `use`, which shadows the file's, and for
+    /// the program's.
+    pub(super) fn use_body(&self, scope: ScopeId, m: &str) -> Option<String> {
+        let declared = self
+            .chain_of(scope)
+            .into_iter()
+            .find(|s| self.names(*s).module(m).is_some())?;
+        self.lexical(scope, declared).filter(|b| !b.is_empty())
+    }
+
+    /// How a read in `scope` reaches the relation `m::p` of the module a
+    /// `use` binds to `m` ([`Self::use_body`]).
+    pub(super) fn use_reach(&self, scope: ScopeId, m: &str) -> Reach {
+        self.use_body(scope, m).map_or(Reach::Own, Reach::Lexical)
     }
 
     /// The scope `super` names in `scope` (R-186): the one around the

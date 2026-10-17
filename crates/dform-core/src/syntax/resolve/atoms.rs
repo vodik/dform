@@ -150,7 +150,7 @@ impl Lowerer<'_> {
             if !self.names(scope).is_relation(p) {
                 return self.error(span, format!("the module {path} has no relation `{p}`"));
             }
-            return Ok((format!("{m}::{p}"), Reach::Own));
+            return Ok((format!("{m}::{p}"), self.use_reach(rc.scope, m)));
         }
         if let Some(c) = n.children().find_map(|c| Chain::of(&c))
             && c.head == "super"

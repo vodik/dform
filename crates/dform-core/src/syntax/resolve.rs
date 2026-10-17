@@ -738,7 +738,9 @@ impl Rc {
 /// ways (`k`, `super.k`) are two.
 fn read_key(name: &str, via: &Reach) -> String {
     match via {
-        Reach::Lexical(body) => format!("{name} of {body}"),
+        Reach::Lexical(body) | Reach::Use(_, Some(body)) => {
+            format!("{} of {body}", via.relation(name))
+        }
         via => via.relation(name),
     }
 }

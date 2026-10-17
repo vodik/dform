@@ -4845,7 +4845,11 @@ a name (`database`, `main`):
   is an object;
 - with a clause, the copy or the import exists only while it holds.
 
-A module reads only what its file declares, never its user's
+A component reads what its file declares as a block reads what is
+around it: the file's `let`s and the modules its `use`s bind, so `use
+pod` at the top of the file is `pod.as_user(uid)` in every component of
+it, each copy the instance it is taken from; a `use` inside the
+component shadows the file's. A module reads only what its file declares, never its user's
 names: a policy pack keyed by the stack's `env` declares `input env`
 and the stack gives it, `use baseline { env }`; a read of a name the
 user declares and the module does not is an error naming the input and

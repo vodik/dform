@@ -350,6 +350,17 @@ pub enum Callee {
     Data(Name),
 }
 
+impl Callee {
+    /// The name a std function or a constructor is written by.
+    pub fn written(&self) -> Option<&str> {
+        match self {
+            Callee::Std(f) => Some(&f.name),
+            Callee::Data(n) => Some(n),
+            _ => None,
+        }
+    }
+}
+
 /// An argument, `x` or `name: x`.
 #[derive(Debug, Clone)]
 pub struct Arg {

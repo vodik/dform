@@ -1444,8 +1444,10 @@ another is scoped under it (`edge.left.vpc`).
 A component is an item of its module as a Rust `fn` is: its
 body reads a name bare from its own scope (its inputs, `let`s and
 resources), then from the scope around it (the module's `let`s, inputs,
-resources and relations; for a component inside another, the enclosing
-component's first), then, for a component of a stack's file, the
+resources, relations and the modules its `use`s bind, so `use pod` at
+the top of the file is `pod.as_user(..)` in each of its components and
+a `use` in the body shadows it; for a component inside another, the
+enclosing component's first), then, for a component of a stack's file, the
 stack's; never from the copy's user, and a component of a module's file
 reads nothing past its module.
 The scope is lexical and by instance: a copy reads the items of the

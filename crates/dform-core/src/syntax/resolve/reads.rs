@@ -273,7 +273,7 @@ impl Lowerer<'_> {
             return Plan::Node(self.var_node(rc, span, &v));
         }
         let pred = via.relation(&decl.name);
-        let used = matches!(via, Reach::Use(_));
+        let used = matches!(via, Reach::Use(..));
         let name = fresh(rc, &capitalise(if used { &pred } else { &decl.name }));
         rc.values.insert(key, name.clone());
         Plan::Read {

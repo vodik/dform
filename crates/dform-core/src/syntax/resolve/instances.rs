@@ -199,7 +199,7 @@ impl Lowerer<'_> {
                 name: x.clone(),
                 at,
             };
-            let via = Reach::Use(h.to_string());
+            let via = Reach::Use(h.to_string(), self.use_body(rc.scope, h));
             return Ok(Res::Value { decl, via, path });
         }
         if own.output(x).is_some() {

@@ -126,6 +126,11 @@ impl<'p> Lowering<'p> {
                 name,
                 via: Reach::Lexical(body),
             } => c.lexical_term(body, &self.segment(*name), x.span).1,
+            // An address in a scope, `scoped(S, n)`: where its scope starts
+            // (a used module's resource under the module's instance).
+            ExprKind::Call { callee, args } if callee.written() == Some(crate::address::SCOPED) => {
+                self.start_of(args[0].value)
+            }
             _ => self.env.from,
         }
     }
@@ -335,6 +340,7 @@ impl<'p> Lowering<'p> {
     fn value_relation(&self, name: &str, via: &Reach, span: Span) -> (String, Option<From>) {
         match (self.env.chain, via) {
             (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, name, span),
+            (Some(c), Reach::Use(_, Some(body))) => c.lexical_pred(body, &via.relation(name), span),
             _ => (via.relation(name), self.env.from),
         }
     }

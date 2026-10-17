@@ -260,3 +260,82 @@ resource around x {}
     let r = s.run(&["plan", "--why=none", "main.df"]).success();
     assert_eq!(cidrs(&r.stdout), ["\"stack\""], "{}", r.stdout);
 }
+
+/// A module its file uses (`use pod`), with a function, a let, a relation
+/// and a resource of the instance the `use` makes.
+const POD: &str = r#"input tag: string
+let as_user(uid: int) = "uid ${uid} ${tag}"
+let k = "k-${tag}"
+zone("z-${tag}")
+resource db.postgres repo { name = "repo-${tag}" }
+"#;
+
+/// A component reads the modules its file uses as it reads the file's
+/// lets (the user's project, 2026-10-16): the `use pod` at the top of
+/// the file is in scope in the component's body, each copy reading the
+/// `pod` of the instance it is taken from, and a `use` in the body
+/// shadows it.
+#[test]
+fn a_component_reads_the_modules_its_file_uses() {
+    let s = Scratch::project("scope-use");
+    s.write("pod.df", POD);
+    s.write(
+        "pod2.df",
+        "let as_user(uid: int) = \"other ${uid}\"\nlet k = \"other\"\n",
+    );
+    s.write(
+        "nodes.df",
+        r#"input t: string
+use pod { tag = t }
+component node {
+  input uid: int
+  resource net.vpc v { cidr = "${pod.as_user(uid)} ${pod.k} ${z} ${pod.repo.name}" } where pod.zone(z)
+}
+component shadowed {
+  use pod2 as pod
+  resource net.vpc v { cidr = "${pod.as_user(1)} ${pod.k}" }
+}
+"#,
+    );
+    s.write(
+        "main.df",
+        r#"use fake
+use nodes as a { t = "A" }
+use nodes as b { t = "B" }
+resource a.node x { uid = 7 }
+resource b.node y { uid = 8 }
+resource a.shadowed s {}
+"#,
+    );
+    let r = s.run(&["plan", "--why=none", "main.df"]).success();
+    assert_eq!(
+        cidrs(&r.stdout),
+        [
+            "\"other 1 other\"",
+            "\"uid 7 A k-A z-A repo-A\"",
+            "\"uid 8 B k-B z-B repo-B\""
+        ],
+        "{}",
+        r.stdout
+    );
+}
+
+/// A component of the stack's file reads a used module's resource as
+/// the module's instance names it, not under the copy.
+#[test]
+fn a_used_modules_resource_is_its_instances_in_a_component() {
+    let s = Scratch::project("scope-use-resource");
+    s.write("pod.df", POD);
+    s.write(
+        "main.df",
+        r#"use fake
+use pod { tag = "t" }
+component node {
+  resource net.vpc v { cidr = pod.repo.name }
+}
+resource node x {}
+"#,
+    );
+    let r = s.run(&["plan", "--why=none", "main.df"]).success();
+    assert_eq!(cidrs(&r.stdout), ["\"repo-t\""], "{}", r.stdout);
+}
