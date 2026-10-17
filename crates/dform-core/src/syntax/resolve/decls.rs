@@ -290,6 +290,16 @@ impl Lowerer<'_> {
         match t.text() {
             "@default" => Ok(Some(Rank::Default)),
             "@override" => Ok(Some(Rank::Override)),
+            "@internal" => {
+                let d = Diagnostic::error(
+                    self.span_of(t.text_range()),
+                    "`@internal` is a provider's rank, not a program's: \
+                     the value a provider gives a field the program leaves out",
+                )
+                .with_help("write `@default`: it overrules the provider's value");
+                self.diags.push(d);
+                Err(Skip)
+            }
             other => self.error(
                 self.span_of(t.text_range()),
                 format!("unknown rank `{other}`: a rank is `@default` or `@override`"),

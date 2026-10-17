@@ -106,7 +106,7 @@ QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi
 INET     := H (":" H){7} PREFIX?                        ; 2001:db8:0:0:0:0:0:1
           | (H (":" H){0,6})? "::" (H (":" H){0,6})? PREFIX?   ; fe80::1/64 ::1 2001:db8::/32
             where H := [0-9a-fA-F]{1,4}, PREFIX := "/" [0-9]{1,3}
-RANK     := "@default" | "@override"
+RANK     := "@default" | "@override"        ; "@internal" is a provider's, never a program's
 COMMENT  := "#" to end of line
 ```
 

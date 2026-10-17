@@ -109,6 +109,7 @@ mod inspection_why;
 mod instances;
 mod instancing;
 mod internal_names;
+mod internal_rank;
 mod k8s;
 mod k8s_api;
 mod k8s_cronjob;

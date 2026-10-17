@@ -66,6 +66,13 @@ impl Surface<'_, '_> {
         };
         let top = rank_of(fact);
         let won = fact.args.get(3).and_then(part);
+        if top == Rank::Internal {
+            if let Some(v) = &won {
+                w.out
+                    .push(Step::provider_default(self.p.redact.surface(v), false));
+            }
+            return;
+        }
         // What it beat: a lower rank's value, where it differs. An object's
         // contributions at the winning rank merge; none of them lost.
         for &(l, f) in &contributions[1..] {
@@ -98,18 +105,22 @@ impl Surface<'_, '_> {
         focus: Option<&Focus>,
         depth: usize,
     ) -> Option<Step> {
-        let site = self.site_of(c, l, depth + 1)?;
+        let expr = match f.args.get(3) {
+            Some(whole) => crate::report::surface_in(
+                self.p.redact,
+                whole,
+                focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                v,
+            ),
+            None => self.p.redact.surface(v),
+        };
         let r = rank_of(f);
+        if r == Rank::Internal {
+            return Some(Step::provider_default(expr, true));
+        }
+        let site = self.site_of(c, l, depth + 1)?;
         Some(Step {
-            expr: match f.args.get(3) {
-                Some(whole) => crate::report::surface_in(
-                    self.p.redact,
-                    whole,
-                    focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
-                    v,
-                ),
-                None => self.p.redact.surface(v),
-            },
+            expr,
             at: place(&site),
             with: Vec::new(),
             rank: (r != Rank::Normal).then(|| r.name().to_string()),
@@ -398,7 +409,8 @@ pub(super) fn rank_of(f: &Fact) -> Rank {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Step {
     pub expr: String,
-    /// `file:line`, or the flag that gave the value (`--set env=prod`).
+    /// `file:line`, the flag that gave the value (`--set env=prod`), or
+    /// `(provider default)`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub at: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -407,6 +419,19 @@ pub struct Step {
     pub rank: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lost: bool,
+}
+
+impl Step {
+    /// A value a provider gave a field the program leaves out
+    /// (`@internal`), `expr`; `lost` when a write of the program's beat it.
+    fn provider_default(expr: String, lost: bool) -> Step {
+        Step {
+            expr,
+            at: super::PROVIDER_DEFAULT.to_string(),
+            lost,
+            ..Step::default()
+        }
+    }
 }
 
 /// A chain being walked: its steps, the writes they beat, and the stack

@@ -13,6 +13,7 @@ use super::style::{Paint, Style};
 use super::tree::Site;
 use super::{FORGOTTEN, KEPT, REPLACED, Report, Why};
 use crate::address::Address;
+use crate::ast::Rank;
 use crate::engine::EvalResult;
 use crate::provider::ActionKind;
 use crate::query::Redactor;
@@ -639,7 +640,7 @@ fn attr_texts(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
         _ => false,
     });
     if why == Why::Line {
-        return match own {
+        return match own || s.is_provider_default() {
             true => vec![],
             false => vec![place_text(s, why)],
         };
@@ -749,6 +750,10 @@ fn beat_text(s: &Site, d: &Deformation) -> String {
     };
     match (&s.beat, &s.beat_at) {
         (Some(_), Some(at)) if own(at) => String::new(),
+        (Some(b), Some(at)) if b == Rank::Internal.name() => {
+            let rank = s.rank.as_deref().unwrap_or("normal");
+            format!("  @{rank} over {at}")
+        }
         (Some(b), Some(at)) => {
             let rank = s.rank.as_deref().unwrap_or("normal");
             format!("  @{rank} over {at} @{b}")

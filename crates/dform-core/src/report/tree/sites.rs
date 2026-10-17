@@ -66,6 +66,26 @@ pub struct Site {
     pub stated: bool,
 }
 
+/// What the site column says of a value a provider gave a field the
+/// program leaves out (`@internal`): no line of the program's wrote it.
+pub const PROVIDER_DEFAULT: &str = "(provider default)";
+
+impl Site {
+    /// The site of a value a provider gave (`@internal`).
+    pub(super) fn provider_default() -> Site {
+        Site {
+            statement: PROVIDER_DEFAULT.to_string(),
+            rank: Some(Rank::Internal.name().to_string()),
+            ..Site::default()
+        }
+    }
+
+    /// Whether a provider gave the value, not the program.
+    pub fn is_provider_default(&self) -> bool {
+        self.rank.as_deref() == Some(Rank::Internal.name())
+    }
+}
+
 /// The cell an `attr` or `arg` of an input, a `let` or an output names,
 /// as a [`Because`](super::Because)'s text spells it (`input kubernetes.nodepool_max`).
 pub fn cell_name(t: &str, a: &str, p: &str) -> String {
@@ -398,6 +418,9 @@ impl Surface<'_, '_> {
         contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f)));
         let (win, fact) = *contributions.first()?;
         let top = rank_of(fact);
+        if top == Rank::Internal {
+            return Some(Site::provider_default());
+        }
         // Part of the value, not reached by the focus: one writer, or none.
         if single
             && contributions
@@ -415,10 +438,22 @@ impl Surface<'_, '_> {
             .filter(|(_, f)| rank_of(f) < top && !placeholder(f, f.args.get(3)))
             .copied()
             .collect();
-        let beat = lower.into_iter().find_map(|(id, f)| {
-            self.site_of(c, id, depth + 1)
+        // A provider's value beaten where it is the part asked about, not
+        // an object of its own leaves beside it, which merges.
+        let provided = |f: &Fact| {
+            f.args
+                .get(3)
+                .and_then(|v| focus.map_or(Some(v), |focus| focus.at(v)))
+                .is_some_and(|part| !matches!(part, Value::Obj(_)))
+        };
+        let beat = lower.into_iter().find_map(|(id, f)| match rank_of(f) {
+            r @ Rank::Internal => {
+                provided(f).then(|| (r.name().to_string(), PROVIDER_DEFAULT.to_string()))
+            }
+            r => self
+                .site_of(c, id, depth + 1)
                 .filter(|w| !w.at.is_empty() && !w.at.starts_with('<'))
-                .map(|w| (rank_of(f).name().to_string(), w.at))
+                .map(|w| (r.name().to_string(), w.at)),
         });
         let mut site = self.value_site(c, win, focus, depth)?;
         if site.rank.is_none() && top != Rank::Normal {

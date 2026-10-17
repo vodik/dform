@@ -1596,8 +1596,9 @@ fn internal(pred: &str, args: Vec<Term>) -> Atom {
 
 /// The schema paths the prelude mints a null for: every `computed` and every
 /// `optional_computed` path outside a list element, with its class and the
-/// rank the null contributes at (`@default` for Optional+Computed, so a
-/// program's value wins). Minted paths do not nest (R-116): a path with
+/// rank the null contributes at (`@internal` for Optional+Computed: the
+/// provider's own, so a program's value wins at any rank, `@default`
+/// too). Minted paths do not nest (R-116): a path with
 /// another below it (a claim's `status.capacity`, a map whose usual keys
 /// the schema types, `status.capacity.storage`) is those leaves, so its
 /// value is not one null beside its own leaves', which disagree with it.
@@ -1610,7 +1611,7 @@ pub fn minted_paths(schema: &Schema) -> Vec<(String, String, NullClass, &'static
     }
     for ((t, p), c) in &schema.optional_computed {
         if !schema.in_list(t, p) {
-            out.push((t.clone(), p.clone(), *c, "default"));
+            out.push((t.clone(), p.clone(), *c, Rank::Internal.name()));
         }
     }
     let below = |t: &str, p: &str| {
@@ -1660,7 +1661,7 @@ fn resolve_rules() -> [RuleStmt; 2] {
 /// ```text
 /// resolve(__label(T, A, P), V) :- identity(T, A, Rid), world_attr(T, Rid, P, V).
 /// resolved(L) :- resolve(L, _).
-/// % per computed (T, P), at rank normal (computed) or default (optional_computed):
+/// % per computed (T, P), at rank normal (computed) or internal (optional_computed):
 /// arg(T, A, P, V, Rank)    :- want(T, A), resolve(__label(T, A, P), V).       % round 0 (not secret)
 /// arg(T, A, P, ?T/A#P, Rank) :- want(T, A), not resolved(__label(T, A, P)).
 /// ```

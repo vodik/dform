@@ -48,7 +48,7 @@ impl Focus {
     }
 
     /// The part of `v` at the keys.
-    fn at<'v>(&self, v: &'v Value) -> Option<&'v Value> {
+    pub(super) fn at<'v>(&self, v: &'v Value) -> Option<&'v Value> {
         self.keys.iter().try_fold(v, |at, k| match at {
             Value::Obj(m) => m.get(k),
             _ => None,

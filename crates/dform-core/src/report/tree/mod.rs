@@ -30,5 +30,5 @@ pub use because::Because;
 pub use chains::Step;
 pub use docrow::DocRow;
 pub use printer::{Focus, Printer, branch, find};
-pub use sites::{Site, cell_name, core_words};
+pub use sites::{PROVIDER_DEFAULT, Site, cell_name, core_words};
 pub use statement::{check_at, written_at};

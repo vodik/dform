@@ -3,7 +3,7 @@
 //! (`compile_resources`), and the adoptions (`compile_adopts`).
 
 use crate::address::{Address, path_join, path_split_first, path_suffix, segment_key};
-use crate::ast::{Atom, Term};
+use crate::ast::{Atom, Rank, Term};
 use crate::schema::Schema;
 use crate::transform;
 use crate::value::Value;
@@ -133,9 +133,7 @@ pub fn compile_resources(
             }
             let theirs = contributions.get(&addr).map(Vec::as_slice).unwrap_or(&[]);
             for (p, _) in schema.optional_computed_of(&addr.typ) {
-                if !schema.in_list(&addr.typ, &p)
-                    && !contributes(theirs, &addr, &p, resolved.get(&own_label(&addr, &p)))
-                {
+                if !schema.in_list(&addr.typ, &p) && !contributes(theirs, &p) {
                     remove_path(&mut root, &p);
                 }
             }
@@ -212,30 +210,14 @@ fn leaves_of(at: &str, v: &Value, out: &mut Vec<(String, Value)>) {
     }
 }
 
-fn own_label(addr: &Address, path: &str) -> String {
-    crate::value::null_label(&addr.typ, &addr.name, path)
-}
-
-/// Whether a contribution other than the prelude's (`transform::computed_prelude`:
-/// at `@default`, the one leaf `path`, the resource's own null or the value
-/// round 0 resolved from the world) reaches `path` of `addr`. A program that
-/// states the prelude's very contribution cannot be told apart from it.
-fn contributes(
-    contributions: &[Contribution],
-    addr: &Address,
-    path: &str,
-    resolved: Option<&Value>,
-) -> bool {
-    let own = own_label(addr, path);
-    let prelude = |c: &Contribution| {
-        c.rank == "default"
-            && matches!(c.leaves.as_slice(), [(p, v)] if p == path
-                && (matches!(v, Value::Null { label, .. } if *label == own)
-                    || Some(v) == resolved))
-    };
+/// Whether a contribution other than a provider's own reaches `path`:
+/// the prelude's (`transform::computed_prelude`), the null it minted or
+/// the value round 0 resolved from the world, is at `@internal`, which no
+/// program writes.
+fn contributes(contributions: &[Contribution], path: &str) -> bool {
     let under = format!("{path}.");
     contributions.iter().any(|c| {
-        !prelude(c)
+        c.rank != Rank::Internal.name()
             && c.leaves
                 .iter()
                 .any(|(p, _)| p == path || p.starts_with(&under))

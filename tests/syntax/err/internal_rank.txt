@@ -1,0 +1,4 @@
+error  `@internal` is a provider's rank, not a program's: the value a provider gives a field the program leaves out
+  tests/syntax/err/internal_rank.df:1  set w.spec.revisionHistoryLimit = 1 @internal where w in k8s.deployment
+                                                                           ^^^^^^^^^
+  help: write `@default`: it overrules the provider's value

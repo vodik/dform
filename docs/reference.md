@@ -1602,8 +1602,9 @@ a kubeconfig held as a secret, and a world read of a live object.
 
 Plan never invents a computed value. The evaluator mints one labeled null
 `?T["N"].attr` per wanted resource and computed attribute (proposal E §2.5), at
-normal rank for `computed` and at `@default` for `optional_computed`, so a
-program's own value wins. A reference to such an attribute, `T["N"].attr`, reads that
+normal rank for `computed` and at `@internal` for `optional_computed`, the
+provider's own rank below `@default`, so a program's own value wins at any
+rank. A reference to such an attribute, `T["N"].attr`, reads that
 cell: the null, or the program's value. Once `N` exists, the world's value
 replaces the null before anything is derived (round 0, through the state's
 identity mapping), so a steady-state stack shows no nulls. Apply mints ids,
@@ -4779,7 +4780,15 @@ input with no clause is an error (give it a default). The layers are
 ranks, never specificity: the default (`@default`) < a `set` (normal
 unless marked) < `--set` (`@override`). Two that both hold and disagree
 at the winning rank are a conflict naming both, so a broad one says
-`@default` and a narrow one that should win says `@override`. The
+`@default` and a narrow one that should win says `@override`. Below
+`@default` is `@internal`, the provider's: the value it gives a field the
+program leaves out (an Optional+Computed attribute's, k8s's
+`revisionHistoryLimit: 10`), read back from the world. Every rank a program
+writes overrules it, so `set w.spec.revisionHistoryLimit = 1 @default where
+w in k8s.deployment` replaces the server's 10 without a conflict; a program
+that writes `@internal` is an error at the rank. `why`, and the plan from
+`-v`, say such a value's site as `(provider default)`: `spec.revisionHistoryLimit
+= 10 → 1  policy.df:50  @default over (provider default)`. The
 deployment's value is the input's name, `db.backup_days`, and `why
 db.backup_days` shows each layer at its `file:line`.
 
